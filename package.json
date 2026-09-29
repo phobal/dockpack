@@ -1,0 +1,30 @@
+{
+  "name": "dockpack-cli",
+  "version": "0.1.0",
+  "description": "Prepare Docker based development and deployment bundles for offline environments",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "dockpack": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "tar": "^7.4.3",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

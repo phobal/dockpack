@@ -1,0 +1,59 @@
+import { spawnSync } from "node:child_process";
+import { DockpackError } from "../errors.js";
+
+export interface DockerPlatform {
+  os: string;
+  architecture: string;
+  id: string;
+}
+
+export class DockerRunner {
+  run(args: string[], options: { timeout?: number; cwd?: string } = {}): string {
+    const result = spawnSync("docker", args, {
+      encoding: "utf8",
+      timeout: options.timeout,
+      cwd: options.cwd,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (result.error) throw new DockpackError(`Cannot run Docker CLI: ${result.error.message}`, { cause: result.error });
+    if (result.status !== 0) {
+      throw new DockpackError(`docker ${args.join(" ")} failed: ${(result.stderr || result.stdout || "unknown Docker error").trim()}`);
+    }
+    return result.stdout.trim();
+  }
+
+  available(): boolean {
+    const result = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8", timeout: 8000 });
+    return result.status === 0;
+  }
+
+  platform(): DockerPlatform {
+    const output = this.run(["info", "--format", "{{.OSType}}/{{.Architecture}}"], { timeout: 15000 });
+    const [os, rawArchitecture] = output.split("/");
+    const architecture = ({ x86_64: "amd64", aarch64: "arm64" } as Record<string, string>)[rawArchitecture ?? ""] ?? rawArchitecture;
+    if (!os || !architecture) throw new DockpackError(`Docker daemon returned an invalid platform: ${output}`);
+    return { os, architecture, id: `${os}/${architecture}` };
+  }
+
+  pull(image: string, platform: string): void {
+    this.run(["pull", "--platform", platform, image]);
+  }
+
+  save(images: string[], outputFile: string): void {
+    if (images.length === 0) throw new DockpackError("No images were selected for export.");
+    this.run(["image", "save", "--output", outputFile, ...images]);
+  }
+
+  load(inputFile: string): void {
+    this.run(["image", "load", "--input", inputFile]);
+  }
+
+  imagePlatform(image: string): string {
+    return this.run(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image]);
+  }
+
+  hasImage(image: string): boolean {
+    const result = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8", timeout: 10000 });
+    return result.status === 0;
+  }
+}
