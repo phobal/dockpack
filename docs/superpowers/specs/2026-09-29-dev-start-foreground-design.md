@@ -12,9 +12,9 @@ The generated development overlay runs `sleep infinity`. `startDev` invokes Comp
 
 1. Add development server settings to `.dockpack.yaml`, separate from production settings: `application.dev_command` and `application.dev_port`.
 2. During `dockpack init`, infer a development command and port from supported project metadata. For a Node project with a Vite `dev` script, run the script with Vite bound to `0.0.0.0`; use the configured or detected Vite port and map it to the host. Projects without a safe inference receive actionable guidance to configure these fields manually.
-3. Generate the Dockpack Compose overlay with the configured development command and port mapping. Keep the existing long-running idle command for environments without a configured dev server so `dev exec` remains usable.
-4. Change `dockpack dev start` to run Compose in attached mode. Forward terminal signals, and on normal exit, Ctrl+C, or termination signals, run Compose `down` for the project services so Dockpack-created containers are removed. Preserve dependency volumes and source files.
-5. Keep `dev stop` available for stopping a started environment from another terminal; its existing stop semantics remain unchanged.
+3. Generate the Dockpack Compose overlay with the configured development command and port mapping. Keep the existing long-running idle command for environments without a configured dev server so `dev exec` remains usable while the stack is running.
+4. Change `dockpack dev start` to run Compose in attached mode. Forward terminal signals, and on normal exit, Ctrl+C, or termination signals, stop and remove only the services selected for this development session. Preserve dependency volumes, source files, and containers for services not selected for the session.
+5. Make `dev init` and `dev rebuild` prepare dependency volumes without detaching a running development stack. Keep `dev stop` available for stopping a started environment from another terminal; its existing stop semantics remain unchanged.
 
 ## Lifecycle and errors
 
@@ -25,7 +25,7 @@ The command validates imported bundle state and locked dependency inputs before 
 - Verify Vite inference includes `--host 0.0.0.0` and the expected port mapping.
 - Verify unconfigured projects retain the idle-container behavior and receive clear setup guidance when the user expects a dev server.
 - Verify attached Compose invocation has no detached flag.
-- Verify Ctrl+C / termination triggers Compose `down`, while preserving dependency volumes.
+- Verify Ctrl+C / termination triggers Compose service removal, while preserving dependency volumes and unselected services.
 - Run the project build and relevant CLI checks.
 
 ## Scope

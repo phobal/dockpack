@@ -26,7 +26,10 @@ export const dockpackConfigSchema = z.object({
   application: z.object({
     service: z.string().default("app"),
     command: z.array(z.string()).default([]),
+    build_command: z.array(z.string()).default([]),
     port: z.number().int().min(1).max(65535).nullable().default(null),
+    dev_command: z.array(z.string()).default([]),
+    dev_port: z.number().int().min(1).max(65535).nullable().default(null),
   }).strict().default({}),
   target: z.object({
     production_platform: z.string().default("linux/amd64"),

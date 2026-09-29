@@ -132,3 +132,8 @@ export async function inspectArchive(bundlePath: string): Promise<BundleManifest
 export async function bundleFingerprint(bundlePath: string): Promise<string> {
   return (await digestFile(bundlePath)).sha256.slice(0, 16);
 }
+
+export function bundleCachePath(fingerprint: string): string {
+  const base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  return path.join(base, "dockpack", "bundles", fingerprint);
+}

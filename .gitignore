@@ -3,4 +3,3 @@ dist/
 *.tgz
 .dockpack/
 .npm-cache/
-.npm-cache/

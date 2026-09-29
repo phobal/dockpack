@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { inspectArchive } from "./bundles/archive.js";
-import { bundleFingerprint, extractArchive } from "./bundles/archive.js";
+import { bundleCachePath, bundleFingerprint, extractArchive } from "./bundles/archive.js";
 import { initializeProject } from "./commands/init.js";
 import { DockpackError } from "./errors.js";
 import { createDevelopmentBundle } from "./dev/pack.js";
 import { execDev, initializeDevProject, rebuildDev, startDev, stopDev } from "./dev/project.js";
 import { DockerRunner } from "./docker/runner.js";
 import { mkdir, rm, readdir } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { buildProductionBundle } from "./prod/build.js";
 import { backupProduction, downProduction, importProductionBundle, logsProduction, restoreProduction, statusProduction, upProduction } from "./prod/deploy.js";
@@ -50,7 +49,7 @@ program.command("import")
   .action(async (bundle: string) => {
     const docker = new DockerRunner();
     if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required to import a bundle.");
-    const root = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "dockpack", "bundles", await bundleFingerprint(bundle));
+    const root = bundleCachePath(await bundleFingerprint(bundle));
     await mkdir(path.dirname(root), { recursive: true });
     await rm(root, { recursive: true, force: true });
     const extracted = await extractArchive(bundle, root);

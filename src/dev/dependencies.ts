@@ -75,7 +75,9 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
     await copyFile(path.join(projectDir, "package-lock.json"), path.join(scratch, "package-lock.json"));
     docker.run([
       "run", "--rm", "--platform", docker.platform().id,
-      "--mount", `type=bind,source=${mountPath(scratch)},target=/manifest,readonly`,
+      // npm ci creates node_modules in its working directory, so this isolated
+      // temporary manifest mount must be writable (the project source is never mounted here).
+      "--mount", `type=bind,source=${mountPath(scratch)},target=/manifest`,
       "--mount", `type=bind,source=${mountPath(npmCache)},target=/cache`,
       "--workdir", "/manifest", image, "npm", "ci", "--cache", "/cache", "--ignore-scripts",
     ]);

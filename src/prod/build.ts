@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stringify } from "yaml";
-import { createArchive } from "../bundles/archive.js";
+import { bundleCachePath, createArchive } from "../bundles/archive.js";
 import { makeManifest } from "../bundles/manifest.js";
 import { getComposeCommand, runCompose } from "../compose/command.js";
 import { analyzeCompose, resolveComposeModel } from "../compose/inspect.js";
@@ -143,6 +143,37 @@ async function validateOfflineBuild(serviceName: string, root: string, buildValu
   }
 }
 
+async function runProjectBuildCommand(root: string, composeFiles: string[], serviceName: string, buildCommand: string[]): Promise<void> {
+  if (buildCommand.length === 0) throw new DockpackError("Set application.build_command in .dockpack.yaml to build the project before its existing Dockerfile is packaged.");
+  const overlay = path.join(root, ".dockpack", "compose.dev.yaml");
+  if (!existsSync(overlay)) throw new DockpackError("Development overlay is missing; run 'dockpack dev init' first.");
+  const prefix: string[] = [];
+  for (const file of [...composeFiles, overlay]) prefix.push("-f", file);
+  const command = getComposeCommand();
+  if (!command) throw new DockpackError("Docker Compose is required to run application.build_command.");
+  const env = { ...process.env, DOCKPACK_PROJECT_DIR: root };
+  runCompose([...prefix, "run", "--rm", "--no-deps", serviceName, ...buildCommand], root, env);
+}
+
+function makePortableBindMounts(model: { services?: Record<string, Record<string, unknown>> }, projectRoot: string, findings: string[]): void {
+  for (const [serviceName, service] of Object.entries(model.services ?? {})) {
+    if (!Array.isArray(service.volumes)) continue;
+    service.volumes = service.volumes.map((volume) => {
+      if (!volume || typeof volume !== "object") return volume;
+      const mount = volume as { type?: string; source?: string; target?: string };
+      if (mount.type !== "bind" || !mount.source) return volume;
+      const absoluteSource = path.isAbsolute(mount.source) ? mount.source : path.resolve(projectRoot, mount.source);
+      const relative = path.relative(projectRoot, absoluteSource);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new DockpackError(`Compose service '${serviceName}' bind mount '${mount.source}' is outside the project directory and cannot be made portable automatically.`);
+      }
+      mount.source = path.posix.join("..", "runtime", ...relative.split(path.sep));
+      findings.push(`Bind mount '${serviceName}:${mount.target ?? ""}' maps to an empty portable runtime directory on the target host.`);
+      return mount;
+    });
+  }
+}
+
 export async function buildProductionBundle(projectDir: string, outputPath: string): Promise<void> {
   const root = path.resolve(projectDir);
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
@@ -154,8 +185,8 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
     const stateFile = path.join(root, ".dockpack", "state.json");
     let bundleRoot: string | undefined;
     try {
-      const state = JSON.parse(await readFile(stateFile, "utf8")) as { bundle_root?: string };
-      bundleRoot = state.bundle_root;
+      const state = JSON.parse(await readFile(stateFile, "utf8")) as { bundle_id?: string; bundle_root?: string };
+      bundleRoot = state.bundle_id ? bundleCachePath(state.bundle_id) : state.bundle_root;
     } catch {
       throw new DockpackError("Production building requires an imported development bundle and initialized .dockpack project state.");
     }
@@ -209,13 +240,26 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
     }
     const overrideServices: Record<string, Record<string, unknown>> = {};
     const appAlreadyConfigured = Boolean(services[appService]?.image || services[appService]?.build);
-    const appNeedsGenerated = !appAlreadyConfigured || needsGeneratedDockerfile(root, services[appService]);
+    const rootDockerfile = path.join(root, "Dockerfile");
+    const appUsesExistingDockerfile = Boolean(services[appService]?.image && !services[appService]?.build && existsSync(rootDockerfile));
+    const appNeedsGenerated = !appAlreadyConfigured || needsGeneratedDockerfile(root, services[appService]) || appUsesExistingDockerfile;
     if (appNeedsGenerated) {
-      await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
-      images.add(generatedImage);
-      overrideServices[appService] = { image: generatedImage, build: null };
-      if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
-      if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${config.application.port}`];
+      if (appUsesExistingDockerfile) {
+        const ecosystem = config.project.ecosystems[0];
+        if (!ecosystem) throw new DockpackError("No project runtime is configured for application.build_command.");
+        await runProjectBuildCommand(root, composeAnalysis.files, `dockpack-dev-${ecosystem}`, config.application.build_command);
+        await validateOfflineBuild(appService, root, { context: ".", dockerfile: "Dockerfile" });
+        const image = String(services[appService]?.image || generatedImage);
+        images.add(image);
+        overrideServices[appService] = { image, build: { context: root, dockerfile: "Dockerfile", network: "none" } };
+        if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
+      } else {
+        await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
+        images.add(generatedImage);
+        overrideServices[appService] = { image: generatedImage, build: null };
+        if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
+        if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${config.application.port}`];
+      }
     }
 
     for (const [name, service] of Object.entries(services)) {
@@ -260,11 +304,11 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
         for (const volume of service.volumes) {
           if (volume && typeof volume === "object") {
             const entry = volume as { type?: string; source?: string; target?: string };
-            if (entry.type === "bind") findings.push(`Service '${name}' has bind mount '${entry.source ?? ""}:${entry.target ?? ""}'; verify the path exists on the production host.`);
+            if (entry.type === "bind") findings.push(`Service '${name}' bind mount to '${entry.target ?? ""}' will use an empty bundle-local runtime directory; existing host data is not included.`);
             if (entry.type === "volume" && entry.source) persistentVolumes.add(entry.source);
           } else if (typeof volume === "string") {
             const source = volume.split(":")[0] ?? "";
-            if (source.startsWith(".") || source.startsWith("/")) findings.push(`Service '${name}' has host bind mount '${volume}'; verify the path exists on the production host.`);
+            if (source.startsWith(".") || source.startsWith("/")) findings.push(`Service '${name}' has a host bind mount; its target path must be validated for portability.`);
           }
         }
       }
@@ -273,7 +317,9 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
     if (Object.keys(overrideServices).length) {
       await writeFile(overridePath, stringify({ services: overrideServices }), "utf8");
       const buildArgs = composePrefix(composeAnalysis.files, overridePath);
-      runCompose(command.prefix, [...buildArgs, "build", "--pull=false", ...Object.keys(overrideServices).filter((name) => services[name]?.build && !(name === appService && appNeedsGenerated))], root);
+      const servicesToBuild = Object.keys(overrideServices).filter((name) => Boolean(overrideServices[name]?.build)
+        && !(name === appService && appNeedsGenerated && !appUsesExistingDockerfile));
+      runCompose([...buildArgs, "build", "--pull=false", ...servicesToBuild], root, docker.buildEnvironment());
       const normalized = await resolveComposeModel(root, [...composeAnalysis.files, overridePath], config.compose.profiles);
       for (const [name, service] of Object.entries(normalized.services ?? {})) {
         if (config.compose.exclude_services.includes(name)) {
@@ -301,6 +347,7 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
           if ((value as { external?: boolean }).external === true) findings.push(`Network '${name}' is external and must exist on the production host.`);
         }
       }
+      makePortableBindMounts(normalized, root, findings);
       await writeFile(normalizedPath, stringify(normalized), "utf8");
     } else {
       for (const [name, service] of Object.entries(composeModel.services)) {
@@ -314,6 +361,7 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
         const image = service.image;
         if (typeof image === "string" && !config.compose.exclude_services.includes(name)) images.add(image);
       }
+      makePortableBindMounts(composeModel, root, findings);
       await writeFile(normalizedPath, stringify(composeModel), "utf8");
     }
     await rm(overridePath, { force: true });

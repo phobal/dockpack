@@ -84,7 +84,7 @@ function missingEnvValues(deployment: Deployment): string[] {
 }
 
 function composeCall(deployment: Deployment, args: string[]): string {
-  return runCompose(composeArgs(deployment), args, deployment.root);
+  return runCompose([...composeArgs(deployment), ...args], deployment.root);
 }
 
 async function validateArchivePaths(archivePath: string): Promise<void> {

@@ -27,6 +27,21 @@ export class DockerRunner {
     return result.status === 0;
   }
 
+  buildEnvironment(): NodeJS.ProcessEnv {
+    const result = spawnSync("docker", ["buildx", "inspect"], { encoding: "utf8", timeout: 10000 });
+    if (result.status === 0 && /\bStatus:\s*inactive\b/i.test(result.stdout)) {
+      const context = spawnSync("docker", ["context", "show"], { encoding: "utf8", timeout: 10000 });
+      const contextName = context.status === 0 ? context.stdout.trim() : "";
+      if (contextName) {
+        const candidate = spawnSync("docker", ["buildx", "inspect", contextName], { encoding: "utf8", timeout: 10000 });
+        if (candidate.status === 0 && /\bStatus:\s*running\b/i.test(candidate.stdout)) {
+          return { ...process.env, BUILDX_BUILDER: contextName };
+        }
+      }
+    }
+    return process.env;
+  }
+
   platform(): DockerPlatform {
     const output = this.run(["info", "--format", "{{.OSType}}/{{.Architecture}}"], { timeout: 15000 });
     const [os, rawArchitecture] = output.split("/");

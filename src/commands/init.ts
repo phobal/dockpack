@@ -2,7 +2,7 @@ import path from "node:path";
 import { createConfigOnce, readConfig } from "../config/io.js";
 import type { DockpackConfig } from "../config/schema.js";
 import { analyzeCompose } from "../compose/inspect.js";
-import { detectProject, inferStartCommand } from "../project/detect.js";
+import { detectProject, inferBuildCommand, inferDevelopmentServer, inferStartCommand } from "../project/detect.js";
 import { DockpackError } from "../errors.js";
 
 export interface InitSummary {
@@ -17,14 +17,24 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
   const root = path.resolve(projectDir);
   const detections = await detectProject(root);
   const compose = await analyzeCompose(root);
+  let packageName = "";
+  try {
+    packageName = (JSON.parse(await (await import("node:fs/promises")).readFile(path.join(root, "package.json"), "utf8")) as { name?: string }).name ?? "";
+  } catch { /* Non-Node projects use the directory name. */ }
+  const identities = [path.basename(root), packageName].filter(Boolean).map((item) => item.toLowerCase().replace(/[^a-z0-9]+/g, ""));
   const composeApplication = compose.services.find((service) => {
     const build = service.build;
     const context = typeof build === "string" ? build : build && typeof build === "object" ? (build as { context?: string }).context : undefined;
     if (context && path.resolve(root, context) === root) return true;
-    return ["app", "api", "web", "backend", "server"].includes(service.name.toLowerCase());
+    if (["app", "api", "web", "backend", "server"].includes(service.name.toLowerCase())) return true;
+    const serviceName = service.name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const imageName = typeof service.image === "string" ? service.image.split("/").at(-1)?.split(":")[0]?.toLowerCase().replace(/[^a-z0-9]+/g, "") : "";
+    return identities.some((identity) => identity === serviceName || identity === imageName);
   });
   const applicationService = composeApplication?.name ?? "app";
   const command = await inferStartCommand(root, detections);
+  const developmentServer = await inferDevelopmentServer(root, detections);
+  const buildCommand = await inferBuildCommand(root, detections);
   let port: number | null = null;
   const ports = composeApplication?.ports;
   if (Array.isArray(ports) && ports.length > 0) {
@@ -38,7 +48,14 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
   const rawConfig = {
     schema_version: 1,
     project: { name: path.basename(root), ecosystems: detections.map((item) => item.ecosystem) },
-    application: { service: applicationService, command, port },
+    application: {
+      service: applicationService,
+      command,
+      build_command: buildCommand,
+      port,
+      dev_command: developmentServer.command,
+      dev_port: developmentServer.port,
+    },
     target: { production_platform: "linux/amd64" },
     compose: {
       files: compose.files.map((file) => path.relative(root, file)),

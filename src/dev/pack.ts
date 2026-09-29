@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { analyzeCompose } from "../compose/inspect.js";
@@ -11,6 +12,21 @@ import { DockerRunner } from "../docker/runner.js";
 import { detectProject } from "../project/detect.js";
 import { stringify } from "yaml";
 import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
+
+async function dockerfileBaseImages(filename: string): Promise<string[]> {
+  if (!existsSync(filename)) return [];
+  const argumentsByName = new Map<string, string>();
+  const result = new Set<string>();
+  for (const line of (await readFile(filename, "utf8")).split(/\r?\n/)) {
+    const arg = line.match(/^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)/);
+    if (arg?.[1] && arg[2]) argumentsByName.set(arg[1], arg[2].replace(/^['"]|['"]$/g, ""));
+    const from = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?([^\s]+)/i);
+    if (!from?.[1]) continue;
+    const image = from[1].replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_whole, braced: string | undefined, plain: string | undefined) => argumentsByName.get(braced ?? plain ?? "") ?? "");
+    if (image && !image.includes("$") && image.toLowerCase() !== "scratch") result.add(image);
+  }
+  return [...result];
+}
 
 export async function createDevelopmentBundle(projectDir: string, outputPath: string): Promise<void> {
   const root = path.resolve(projectDir);
@@ -48,6 +64,13 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       dependencies.push(dependency);
     }
 
+    // Production images may use a different base architecture than this
+    // development host. Cache project Dockerfile bases for the amd64 build.
+    for (const baseImage of await dockerfileBaseImages(path.join(root, "Dockerfile"))) {
+      docker.pull(baseImage, "linux/amd64");
+      images.add(baseImage);
+    }
+
     const infrastructure = compose.services.filter((service) => service.name !== config.application.service
       && !config.compose.exclude_services.includes(service.name));
     const buildServices = infrastructure.filter((service) => service.build);
@@ -70,7 +93,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       for (const file of compose.files) composeArgs.push("-f", file);
       composeArgs.push("-f", overrideFile);
       if (composeCommand.prefix[0] === "docker") for (const profile of config.compose.profiles) composeArgs.push("--profile", profile);
-      runCompose(composeCommand.prefix, [...composeArgs, "build", ...buildServices.map((service) => service.name)], root);
+      runCompose([...composeArgs, "build", ...buildServices.map((service) => service.name)], root);
       await (await import("node:fs/promises")).rm(overrideFile, { force: true });
     }
     for (const service of infrastructure) {

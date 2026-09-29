@@ -4,19 +4,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stringify } from "yaml";
-import { bundleFingerprint, extractArchive } from "../bundles/archive.js";
+import { bundleCachePath, bundleFingerprint, extractArchive } from "../bundles/archive.js";
 import { readConfig } from "../config/io.js";
 import { DockpackError } from "../errors.js";
 import { DockerRunner } from "../docker/runner.js";
-import { runCompose, getComposeCommand } from "../compose/command.js";
+import { runCompose, runComposeAttached, getComposeCommand } from "../compose/command.js";
 import { analyzeCompose } from "../compose/inspect.js";
 import { sha256Files } from "./dependencies.js";
+import { detectProject, inferDevelopmentServer } from "../project/detect.js";
 
 interface ProjectState {
   schema_version: 1;
-  project_dir: string;
   bundle_id: string;
-  bundle_root: string;
   compose_overlay: string;
   dependencies: Record<string, string>;
   installed_dependencies?: Record<string, string>;
@@ -35,15 +34,27 @@ function volumeName(root: string, ecosystem: string, version: string): string {
 async function readState(projectDir: string): Promise<ProjectState> {
   const file = path.join(projectDir, ".dockpack", "state.json");
   try {
-    return JSON.parse(await readFile(file, "utf8")) as ProjectState;
+    const state = JSON.parse(await readFile(file, "utf8")) as ProjectState & { bundle_root?: string; project_dir?: string };
+    if (!state.bundle_id) throw new Error("bundle_id is missing");
+    state.compose_overlay = path.join(".dockpack", "compose.dev.yaml");
+    delete state.bundle_root;
+    delete state.project_dir;
+    const manifestPath = path.join(bundleCachePath(state.bundle_id), "manifest.json");
+    if (!existsSync(manifestPath)) {
+      throw new DockpackError(`The imported development bundle cache is missing. Run 'dockpack dev init --bundle <bundle>' on this machine.`);
+    }
+    await writeOverlay(projectDir, state, "restore");
+    return state;
   } catch (error) {
+    if (error instanceof DockpackError) throw error;
     throw new DockpackError(`No initialized Dockpack development environment in ${projectDir}. Run 'dockpack dev init' first.`, { cause: error });
   }
 }
 
-async function writeOverlay(root: string, state: ProjectState, version: string): Promise<void> {
-  const config = await readConfig(path.join(root, ".dockpack.yaml"));
-  const manifest = JSON.parse(await readFile(path.join(state.bundle_root, "manifest.json"), "utf8")) as { images: string[] };
+async function writeOverlay(root: string, state: ProjectState, version: string, configOverride?: Awaited<ReturnType<typeof readConfig>>): Promise<void> {
+  const config = configOverride ?? await readConfig(path.join(root, ".dockpack.yaml"));
+  const bundleRoot = bundleCachePath(state.bundle_id);
+  const manifest = JSON.parse(await readFile(path.join(bundleRoot, "manifest.json"), "utf8")) as { images: string[] };
   const services: Record<string, unknown> = {};
   const volumes: Record<string, { name: string }> = {};
   for (const ecosystem of config.project.ecosystems) {
@@ -59,11 +70,11 @@ async function writeOverlay(root: string, state: ProjectState, version: string):
     services[serviceName] = {
       image,
       working_dir: "/workspace",
-      command: ["sleep", "infinity"],
+      command: config.application.dev_command.length > 0 ? config.application.dev_command : ["sleep", "infinity"],
+      ...(config.application.dev_port ? { ports: [`${config.application.dev_port}:${config.application.dev_port}`] } : {}),
       volumes: [
-        { type: "bind", source: root, target: "/workspace" },
+        { type: "bind", source: "${DOCKPACK_PROJECT_DIR}", target: "/workspace" },
         { type: "volume", source: volumeKey, target: ecosystem === "python" ? "/opt/dockpack/deps" : "/workspace/node_modules" },
-        { type: "bind", source: path.join(state.bundle_root, "cache"), target: "/dockpack-cache", read_only: true },
       ],
       ...(ecosystem === "python" ? { environment: { VIRTUAL_ENV: "/opt/dockpack/deps", PATH: "/opt/dockpack/deps/bin:/usr/local/bin:/usr/bin:/bin" } } : {}),
     };
@@ -71,16 +82,17 @@ async function writeOverlay(root: string, state: ProjectState, version: string):
   }
   const overlayFile = path.join(root, ".dockpack", "compose.dev.yaml");
   await writeFile(overlayFile, stringify({ services, volumes }), "utf8");
-  state.compose_overlay = overlayFile;
+  state.compose_overlay = path.join(".dockpack", "compose.dev.yaml");
   await writeFile(path.join(root, ".dockpack", "state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
-async function composePrefix(root: string, state: ProjectState): Promise<string[]> {
+async function composePrefix(root: string, state: ProjectState, extraFiles: string[] = []): Promise<string[]> {
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
   const analysis = await analyzeCompose(root, config.compose.files);
   const result: string[] = [];
   for (const file of analysis.files) result.push("-f", file);
-  result.push("-f", state.compose_overlay);
+  result.push("-f", path.resolve(root, state.compose_overlay));
+  for (const file of extraFiles) result.push("-f", file);
   if (config.compose.profiles.length > 0) {
     const command = getComposeCommand();
     if (command?.prefix[0] !== "docker") throw new DockpackError("Legacy docker-compose does not support profiles; use the Compose plugin or remove profiles.");
@@ -89,10 +101,29 @@ async function composePrefix(root: string, state: ProjectState): Promise<string[
   return result;
 }
 
-async function compose(root: string, state: ProjectState, args: string[]): Promise<string> {
-  const command = getComposeCommand();
-  if (!command) throw new DockpackError("Neither 'docker compose' nor 'docker-compose' is available.");
-  return runCompose(command.prefix, [...await composePrefix(root, state), ...args], root);
+async function compose(root: string, state: ProjectState, args: string[], options: { extraFiles?: string[]; cacheDir?: string } = {}): Promise<string> {
+  if (!getComposeCommand()) throw new DockpackError("Neither 'docker compose' nor 'docker-compose' is available.");
+  const env = {
+    ...process.env,
+    DOCKPACK_PROJECT_DIR: root,
+    ...(options.cacheDir ? { DOCKPACK_CACHE_DIR: options.cacheDir } : {}),
+  };
+  return runCompose([...await composePrefix(root, state, options.extraFiles), ...args], root, env);
+}
+
+async function withInstallCache<T>(root: string, state: ProjectState, ecosystem: string, run: (overlay: string, cacheDir: string) => Promise<T>): Promise<T> {
+  const service = `dockpack-dev-${ecosystem}`;
+  const overlay = path.join(root, ".dockpack", "compose.install.yaml");
+  const cacheDir = path.join(bundleCachePath(state.bundle_id), "cache");
+  if (!existsSync(cacheDir)) throw new DockpackError("Dependency cache is missing; import the development bundle again.");
+  await writeFile(overlay, stringify({ services: { [service]: { volumes: [
+    { type: "bind", source: "${DOCKPACK_CACHE_DIR}", target: "/dockpack-cache", read_only: true },
+  ] } } }), "utf8");
+  try {
+    return await run(overlay, cacheDir);
+  } finally {
+    await rm(overlay, { force: true });
+  }
 }
 
 async function installOne(root: string, state: ProjectState, ecosystem: string): Promise<void> {
@@ -100,15 +131,19 @@ async function installOne(root: string, state: ProjectState, ecosystem: string):
   if (ecosystem === "python") {
     const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => state.dependencies.python && exists(path.join(root, name)));
     if (!requirements) throw new DockpackError("Python offline installation requires requirements.txt or requirements-dev.txt.");
-    await compose(root, state, ["run", "--network", "none", "--rm", "--no-deps", service, "python", "-m", "venv", "/opt/dockpack/deps"]);
-    await compose(root, state, [
-      "run", "--network", "none", "--rm", "--no-deps", service, "/opt/dockpack/deps/bin/python", "-m", "pip", "install",
-      "--no-index", "--find-links", "/dockpack-cache/python", "-r", `/workspace/${requirements}`,
-    ]);
+    await withInstallCache(root, state, ecosystem, async (overlay, cacheDir) => {
+      await compose(root, state, ["run", "--rm", "--no-deps", service, "python", "-m", "venv", "/opt/dockpack/deps"], { extraFiles: [overlay], cacheDir });
+      await compose(root, state, [
+        "run", "--rm", "--no-deps", service, "/opt/dockpack/deps/bin/python", "-m", "pip", "install",
+        "--no-index", "--find-links", "/dockpack-cache/python", "-r", `/workspace/${requirements}`,
+      ], { extraFiles: [overlay], cacheDir });
+    });
     return;
   }
   if (ecosystem === "node") {
-    await compose(root, state, ["run", "--network", "none", "--rm", "--no-deps", service, "npm", "ci", "--offline", "--cache", "/dockpack-cache/npm"]);
+    await withInstallCache(root, state, ecosystem, async (overlay, cacheDir) => {
+      await compose(root, state, ["run", "--rm", "--no-deps", service, "npm", "ci", "--offline", "--cache", "/dockpack-cache/npm"], { extraFiles: [overlay], cacheDir });
+    });
     return;
   }
   throw new DockpackError(`Unsupported ecosystem: ${ecosystem}`);
@@ -155,10 +190,8 @@ export async function initializeDevProject(projectDir: string, bundlePath: strin
     for (const filename of imageArchives) if (filename.endsWith(".tar")) docker.load(path.join(permanentRoot, "images", filename));
     const state: ProjectState = {
       schema_version: 1,
-      project_dir: root,
       bundle_id: await bundleFingerprint(bundlePath),
-      bundle_root: permanentRoot,
-      compose_overlay: path.join(root, ".dockpack", "compose.dev.yaml"),
+      compose_overlay: path.join(".dockpack", "compose.dev.yaml"),
       dependencies: manifest.dependencies,
       dependency_volumes: {},
     };
@@ -168,8 +201,6 @@ export async function initializeDevProject(projectDir: string, bundlePath: strin
     for (const ecosystem of config.project.ecosystems) await installOne(root, state, ecosystem);
     state.installed_dependencies = state.dependencies;
     await writeFile(path.join(root, ".dockpack", "state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    const serviceNames = config.project.ecosystems.map((ecosystem) => `dockpack-dev-${ecosystem}`);
-    await compose(root, state, ["up", "-d", ...config.compose.include_services, ...serviceNames]);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -182,8 +213,38 @@ export async function startDev(projectDir: string): Promise<void> {
   await ensureDependencyInputsMatch(root, state);
   if (JSON.stringify(state.installed_dependencies ?? {}) !== JSON.stringify(state.dependencies)) throw new DockpackError("Dependencies are not installed. Run 'dockpack dev rebuild'.");
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
+  if (config.application.dev_command.length === 0) {
+    const inferred = await inferDevelopmentServer(root, await detectProject(root), config.application.dev_port);
+    config.application.dev_command = inferred.command;
+    config.application.dev_port = inferred.port ?? config.application.dev_port;
+  }
+  await writeOverlay(root, state, "current", config);
   const serviceNames = config.project.ecosystems.map((ecosystem) => `dockpack-dev-${ecosystem}`);
-  await compose(root, state, ["up", "-d", ...config.compose.include_services, ...serviceNames]);
+  const services = [...config.compose.include_services, ...serviceNames];
+  console.log(config.application.dev_command.length > 0
+    ? `Starting development server${config.application.dev_port ? ` at http://localhost:${config.application.dev_port}` : ""}. Press Ctrl+C to stop and remove the development containers.`
+    : "Starting development containers. No development server was detected; configure application.dev_command and application.dev_port in .dockpack.yaml.");
+  let failure: unknown;
+  let exitSignal: NodeJS.Signals | null = null;
+  try {
+    const result = await runComposeAttached(
+      [...await composePrefix(root, state), "up", ...services],
+      root,
+      { ...process.env, DOCKPACK_PROJECT_DIR: root },
+    );
+    exitSignal = result.signal;
+    if (result.code !== 0 && result.signal === null) throw new DockpackError(`Development services exited with status ${result.code ?? 1}.`);
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await compose(root, state, ["rm", "-sf", ...services]);
+  } catch (cleanupError) {
+    if (failure) console.error(`dockpack: cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    else failure = cleanupError;
+  }
+  if (failure) throw failure;
+  if (exitSignal) process.exitCode = exitSignal === "SIGINT" ? 130 : exitSignal === "SIGTERM" ? 143 : 1;
 }
 
 export async function stopDev(projectDir: string): Promise<void> {
@@ -207,7 +268,7 @@ export async function execDev(projectDir: string, command: string[]): Promise<vo
   const prefix = await composePrefix(root, state);
   const result = spawnSync(composeCommand.prefix[0]!, [
     ...composeCommand.prefix.slice(1), ...prefix, "exec", "-T", `dockpack-dev-${ecosystem}`, ...command,
-  ], { cwd: root, stdio: "inherit" });
+  ], { cwd: root, env: { ...process.env, DOCKPACK_PROJECT_DIR: root }, stdio: "inherit" });
   if (result.error) throw new DockpackError(`Cannot execute in development container: ${result.error.message}`, { cause: result.error });
   if (result.status !== 0) process.exitCode = result.status ?? 1;
 }
@@ -225,8 +286,6 @@ export async function rebuildDev(projectDir: string): Promise<void> {
     for (const ecosystem of config.project.ecosystems) await installOne(root, state, ecosystem);
     state.installed_dependencies = state.dependencies;
     await writeFile(path.join(root, ".dockpack", "state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    const services = config.project.ecosystems.map((ecosystem) => `dockpack-dev-${ecosystem}`);
-    await compose(root, state, ["up", "-d", "--force-recreate", ...services]);
   } catch (error) {
     state.dependency_volumes = oldVolumes;
     await writeOverlay(root, state, "restore");
