@@ -1,0 +1,11 @@
+# Build output contains only runtime JavaScript; exclude developer/source files defensively.
+src/
+scripts/
+docs/
+*.ts
+*.map
+tsconfig.json
+package-lock.json
+.gitignore
+.npmignore
+*.tgz
