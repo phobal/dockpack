@@ -1,58 +1,56 @@
-# dockpack CLI
+# dockpack 命令行工具
 
-TypeScript implementation of Dockpack. The package exposes the global `dockpack` executable through npm's `bin` mapping.
+dockpack 用于在可联网的机器上准备基于 Docker 的开发与部署离线包，再将离线包导入无网络环境运行。开发包包含当前支持的 Python 或 Node.js 依赖缓存和运行时镜像；生产包包含部署项目所需的 Linux amd64 镜像和 Compose 配置。
 
-## Requirements
+dockpack 负责打包和环境生命周期管理，不负责在机器之间同步项目源代码。请另行将项目代码复制或检出到目标机器。
 
-- Node.js 20 or newer to develop the CLI.
-- Docker on machines that create or run offline bundles.
-- Docker Compose v2 (`docker compose`) or legacy Compose (`docker-compose`).
+## 环境要求
 
-## Local development
+- 运行或开发命令行工具需要 Node.js 20 或更高版本。
+- 创建、导入或运行离线包需要 Docker CLI 和正在运行的 Docker 后台服务（daemon）。
+- 使用 Compose 的项目，以及开发和部署生命周期命令，需要 Docker Compose v2（`docker compose`）或旧版 Compose（`docker-compose`）。
+- 生产打包所用的 Docker daemon 必须能够构建 Linux 容器。当前生产包目标平台为 `linux/amd64`。
+
+## 安装与构建
+
+在代码仓库中执行：
 
 ```sh
 npm install
 npm run build
-node dist/cli.js init /path/to/project
+node dist/cli.js --help
 ```
 
-## Global installation
-
-After publishing the package to npm:
+将软件发布到 npm 后，可全局安装 `dockpack` 命令：
 
 ```sh
 npm install --global dockpack-cli
 dockpack --help
 ```
 
-## Implemented commands
+## 常见工作流程
+
+### 准备和使用离线开发环境
+
+在有网络、包含项目源代码且 Docker 可用的机器上执行：
 
 ```sh
-dockpack init [project-directory]
-dockpack pack dev [project-directory] --output <archive>
-dockpack pack inspect <archive>
-dockpack import <archive>
-dockpack dev init [project-directory] --bundle <archive>
-dockpack dev start [project-directory]
-dockpack dev stop [project-directory]
-dockpack dev exec [project-directory] -- <command>
-dockpack dev rebuild [project-directory]
-dockpack build prod [project-directory] --output <archive>
-dockpack prod inspect <archive>
-dockpack deploy import|up|down|status|logs|backup|restore <archive>
+dockpack init ./my-project
+# 按需检查并修改 my-project/.dockpack.yaml
+dockpack pack dev ./my-project --output ./my-project-dev.tar.gz
 ```
 
-Python dependency collection currently supports `requirements.txt` through pip; Node.js collection supports npm `package-lock.json`. Other package managers are detected and reported but rejected by bundle creation until their offline cache adapters are implemented.
+将开发包和项目源代码分别传到离线机器，然后执行：
 
-`dockpack pack dev` prints progress and elapsed time for each packaging stage. Docker image pulls, Python/Node dependency collection, Compose image builds, and image export stream their command output so long-running work remains visible.
+```sh
+dockpack init ./my-project            # 仅在项目中没有 .dockpack.yaml 时执行
+dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
+dockpack dev start ./my-project
+```
 
-## Portable project state
+`dev init` 会校验归档和依赖输入文件，将包内 Docker 镜像导入本机 Docker 后台服务，把开发包缓存存到 `$XDG_CACHE_HOME/dockpack/bundles/`（未设置时使用 `~/.cache/dockpack/bundles/`），并创建本地依赖卷。该命令不会启动应用服务。项目中的依赖文件必须与打包时一致；dockpack 会校验文件哈希，文件变化后需要重新生成开发包。
 
-`dockpack dev init` writes local state under `.dockpack/`. The generated `.dockpack/compose.dev.yaml` uses `${DOCKPACK_PROJECT_DIR}` for the source mount; Dockpack sets it to the project path for each Compose invocation. The machine-local dependency cache is mounted only by a temporary `.dockpack/compose.install.yaml` during `dev init` or `dev rebuild`, then removed. No cache or source absolute path is persisted in the overlay or state file.
-
-On another machine, copy or check out the source at its desired location, bring the development bundle, run `dockpack init <project-directory>` if `.dockpack.yaml` is not present, then run `dockpack dev init <project-directory> --bundle <bundle>`. This imports the bundle into that machine's XDG cache and creates a local dependency volume. Use Dockpack commands to run the generated Compose overlay; invoking it directly requires setting `DOCKPACK_PROJECT_DIR` yourself.
-
-`dockpack dev init` and `dockpack dev rebuild` prepare the dependency volume without starting services. `dockpack dev start [project-directory]` starts the development Compose services in the foreground and streams their output. For Node projects whose `dev` script invokes Vite, Dockpack adds `--host 0.0.0.0`, maps the detected port (or Vite's default `5173`) to the host, and prints the local URL. Press `Ctrl+C` to stop and remove the containers for services started by this session; named dependency volumes and unselected service containers are preserved. For other projects, set `application.dev_command` and optionally `application.dev_port` in `.dockpack.yaml`, for example:
+`dev start` 会在前台运行配置的 Compose 服务和 dockpack 开发运行容器。按 `Ctrl+C` 会停止并移除本次启动的容器；命名依赖卷和其他服务容器会保留。对于 `dev` 脚本中调用 Vite 的 Node.js 项目，dockpack 会推断启动命令、将服务绑定到 `0.0.0.0`、映射端口（默认 `5173`），并显示本地访问地址。其他项目需要在 `.dockpack.yaml` 中配置 `application.dev_command`，并可选填 `application.dev_port`：
 
 ```yaml
 application:
@@ -60,6 +58,82 @@ application:
   dev_port: 5173
 ```
 
-`dockpack init` checks the project root and a single unambiguous nested Compose project (up to four directory levels). It reads Node runtime hints from `.nvmrc`, `.node-version`, `.tool-versions`, `package.json` `engines.node`, and explicit `NODE_VERSION` assignments in common setup scripts. It may infer `application.build_command` from a project deployment script; review the generated config before packaging.
+其他开发命令：
 
-Production packaging can use an application service's existing root `Dockerfile` and the configured build command. `dockpack pack dev` includes amd64 base images referenced by the root Dockerfile for later production builds. The production Compose bundle rewrites project-local bind mounts to relative paths under its `runtime/` directory; those directories start empty, so existing host data is not included.
+```sh
+dockpack dev exec ./my-project -- npm run lint
+dockpack dev stop ./my-project
+dockpack dev rebuild ./my-project
+```
+
+`dev exec` 在第一个已配置的 Python 或 Node.js 开发容器中执行命令；该容器必须正在运行。`dev stop` 停止已配置的开发服务和纳入运行的 Compose 服务。`dev rebuild` 使用导入的离线缓存创建新的依赖卷并安装依赖，不会启动服务。
+
+### 构建和运行离线生产部署包
+
+先在将要构建生产包的机器上导入并初始化开发包，使收集到的依赖缓存和基础镜像可供离线构建使用。然后生成生产归档：
+
+```sh
+dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
+dockpack build prod ./my-project --output ./my-project-prod.tar.gz
+```
+
+将生产归档传到目标 Linux amd64 Docker 主机后执行部署：
+
+```sh
+dockpack deploy import ./my-project-prod.tar.gz
+dockpack deploy up ./my-project-prod.tar.gz
+dockpack deploy status ./my-project-prod.tar.gz
+dockpack deploy logs ./my-project-prod.tar.gz [service]
+dockpack deploy down ./my-project-prod.tar.gz
+```
+
+部署文件存放在 `$XDG_DATA_HOME/dockpack/deployments/`（未设置时使用 `~/.local/share/dockpack/deployments/`）。需要的镜像尚未导入时，`deploy up` 会从包中导入镜像，然后启动 Compose；此过程不会构建或拉取镜像。如果包声明了生产环境变量，请在部署目录的 `.env` 文件或启动命令的进程环境中提供这些变量。需要配置的变量会写入包内的 `.env.example`。
+
+对于 Compose 项目，生产打包会解析配置的 Compose 文件，纳入未排除的服务并打包其镜像。带有 `build` 配置的服务会在禁用网络的情况下构建为 `linux/amd64` 镜像。没有 `build` 配置的服务所引用的镜像必须已存在于本机，且平台匹配；生产构建过程不会拉取这些镜像。`pack dev` 也会尝试缓存项目根目录 `Dockerfile` 中引用的 `linux/amd64` 基础镜像，供使用该 Dockerfile 的生产构建流程使用。其他构建基础镜像和镜像引用需要预先以所需平台准备好。如果项目没有 Compose 配置，dockpack 会生成单应用镜像和 Compose 文件；此方式要求项目只检测到一种运行时、依赖输入受支持，并且显式配置 `application.command`。
+
+`deploy backup` 会归档内部命名卷，并在备份期间短暂停止再重启服务。`deploy restore` 将备份恢复到同一项目；目标卷非空时必须添加 `--overwrite`。备份和恢复要求本机 Docker 主机运行 Linux。`deploy down` 会保留命名卷。
+
+```sh
+dockpack deploy backup ./my-project-prod.tar.gz --output ./my-project-backup.tar.gz
+dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.tar.gz
+dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.tar.gz --overwrite
+```
+
+## 命令一览
+
+```text
+dockpack init [project-directory]
+dockpack pack dev [project-directory] --output <archive>
+dockpack pack inspect <archive>
+dockpack import <archive>
+dockpack dev init [project-directory] --bundle <archive>
+dockpack dev start|stop|rebuild [project-directory]
+dockpack dev exec [project-directory] -- <command...>
+dockpack build prod [project-directory] --output <archive>
+dockpack prod inspect <archive>
+dockpack deploy import|up|down|status <archive>
+dockpack deploy logs <archive> [service]
+dockpack deploy backup <archive> [--output <archive>]
+dockpack deploy restore <archive> --backup <archive> [--overwrite]
+```
+
+`pack inspect` 和 `prod inspect` 会校验归档路径及校验和，然后输出包的元数据。`dockpack import` 是通用的镜像导入命令；开发环境应使用 `dev init`，它还会安装依赖并写入项目状态。生产部署命令则会管理部署目录和 Compose 服务。
+
+## 项目发现与配置
+
+`dockpack init` 会分析项目，并且只在 `.dockpack.yaml` 不存在时创建配置文件。它会报告检测到的 Python/Node.js 运行时、Compose 服务和需要关注的问题；如果配置文件已存在，则会保留原文件。Compose 发现逻辑会检查项目根目录中的标准文件名，也会向下检查最多四层目录，寻找唯一且明确的嵌套项目。如果发现多个嵌套项目，请在 `compose.files` 中指定配置文件。
+
+初始化时，dockpack 可从 `.nvmrc`、`.node-version`、`.tool-versions`、`package.json` 的 `engines.node` 字段，以及常见脚本中的显式 `NODE_VERSION` 赋值读取 Node.js 版本提示。它还会尝试从项目元数据推断应用启动和构建命令，并为 Vite 推断开发命令。打包前请检查生成的配置，尤其是 `application.service`、`application.command`、`application.build_command`、Compose 服务选择和依赖文件列表。
+
+当前版本支持收集以下离线依赖：
+
+- Python：通过 pip 收集 `requirements.txt` 或 `requirements-dev.txt`。
+- Node.js：通过 npm 收集 `package.json` 和 `package-lock.json` 对应的依赖。
+
+`init` 可能会检测到其他 Python 或 Node.js 包管理器，但当前版本尚不支持用它们创建离线包。Python 项目需要可检测到 Python 主版本和次版本；Node.js 项目需要可检测到 Node.js 版本。`pack dev` 会显示各阶段的进度和耗时，并实时输出较长时间运行的 Docker 和包管理器命令日志。
+
+## 离线包和路径处理
+
+离线包是带有清单和 SHA-256 校验和的 gzip 压缩 tar 归档。导入和检查归档时，dockpack 会先校验归档内容。开发状态保存在项目的 `.dockpack/` 目录下；生成的 `.dockpack/compose.dev.yaml` 使用 `${DOCKPACK_PROJECT_DIR}` 挂载项目源代码，dockpack 在调用 Compose 时会设置此变量。安装依赖期间，临时文件 `.dockpack/compose.install.yaml` 会挂载本机缓存，安装结束后即删除。生成的 overlay 和状态文件不会保存项目目录或缓存目录的绝对路径。
+
+生产 Compose 配置中指向项目内部的绑定挂载（bind mount）会改写为相对于部署目录 `runtime/` 的路径。该目录初始为空，因此主机上的文件和挂载数据不会被复制进离线包。外部卷、外部网络、密钥配置（secrets）、主机网络和设备映射可能需要在目标主机单独配置；请检查打包时的警告和生产包内的说明文档。
