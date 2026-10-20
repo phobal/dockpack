@@ -2,7 +2,21 @@
   "name": "dockpack-cli",
   "version": "0.1.0",
   "description": "Prepare Docker based development and deployment bundles for offline environments",
+  "author": "phobal <fphobal@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phobal/dockpack.git"
+  },
+  "keywords": [
+    "docker",
+    "offline",
+    "docker-compose",
+    "development",
+    "deployment",
+    "python",
+    "nodejs"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"
