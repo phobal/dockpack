@@ -15,19 +15,25 @@ export function getComposeCommand(): ComposeCommand | undefined {
   return undefined;
 }
 
-export function runCompose(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+export function runCompose(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { streamOutput?: boolean } = {},
+): string {
   const command = getComposeCommand();
   if (!command) throw new DockpackError("Neither 'docker compose' nor 'docker-compose' is available.");
-  const result = spawnSync(command.prefix[0]!, [...command.prefix.slice(1), ...args], {
-    cwd,
-    env,
-    encoding: "utf8",
-    timeout: undefined,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const commandArgs = [...command.prefix.slice(1), ...args];
+  const result = options.streamOutput
+    ? spawnSync(command.prefix[0]!, commandArgs, { cwd, env, stdio: "inherit", timeout: undefined })
+    : spawnSync(command.prefix[0]!, commandArgs, { cwd, env, encoding: "utf8", timeout: undefined, maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw new DockpackError(`Cannot run Compose: ${result.error.message}`, { cause: result.error });
-  if (result.status !== 0) throw new DockpackError((result.stderr || result.stdout || "Compose command failed").trim());
-  return result.stdout.trim();
+  if (result.status !== 0) {
+    const stderr = result.stderr?.toString() ?? "";
+    const stdout = result.stdout?.toString() ?? "";
+    throw new DockpackError((stderr || stdout || `Compose command exited with status ${result.status ?? 1}.`).trim());
+  }
+  return result.stdout?.toString().trim() ?? "";
 }
 
 export interface ComposeExit {

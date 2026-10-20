@@ -8,18 +8,22 @@ export interface DockerPlatform {
 }
 
 export class DockerRunner {
-  run(args: string[], options: { timeout?: number; cwd?: string } = {}): string {
-    const result = spawnSync("docker", args, {
-      encoding: "utf8",
+  run(args: string[], options: { timeout?: number; cwd?: string; streamOutput?: boolean } = {}): string {
+    const common = {
       timeout: options.timeout,
       cwd: options.cwd,
       maxBuffer: 64 * 1024 * 1024,
-    });
+    };
+    const result = options.streamOutput
+      ? spawnSync("docker", args, { ...common, stdio: "inherit" })
+      : spawnSync("docker", args, { ...common, encoding: "utf8" });
     if (result.error) throw new DockpackError(`Cannot run Docker CLI: ${result.error.message}`, { cause: result.error });
     if (result.status !== 0) {
-      throw new DockpackError(`docker ${args.join(" ")} failed: ${(result.stderr || result.stdout || "unknown Docker error").trim()}`);
+      const stderr = result.stderr?.toString() ?? "";
+      const stdout = result.stdout?.toString() ?? "";
+      throw new DockpackError(`docker ${args.join(" ")} failed: ${(stderr || stdout || "unknown Docker error").trim()}`);
     }
-    return result.stdout.trim();
+    return result.stdout?.toString().trim() ?? "";
   }
 
   available(): boolean {
@@ -50,13 +54,13 @@ export class DockerRunner {
     return { os, architecture, id: `${os}/${architecture}` };
   }
 
-  pull(image: string, platform: string): void {
-    this.run(["pull", "--platform", platform, image]);
+  pull(image: string, platform: string, streamOutput = false): void {
+    this.run(["pull", "--platform", platform, image], { streamOutput });
   }
 
-  save(images: string[], outputFile: string): void {
+  save(images: string[], outputFile: string, streamOutput = false): void {
     if (images.length === 0) throw new DockpackError("No images were selected for export.");
-    this.run(["image", "save", "--output", outputFile, ...images]);
+    this.run(["image", "save", "--output", outputFile, ...images], { streamOutput });
   }
 
   load(inputFile: string): void {

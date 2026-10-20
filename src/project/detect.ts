@@ -30,8 +30,11 @@ export async function detectPython(projectDir: string): Promise<EcosystemDetecti
   if (dependencyFiles.length === 0 && lockFiles.length === 0) return undefined;
 
   const managers = new Set(lockFiles.map((name) => lockMap[name]));
-  if (dependencyFiles.includes("requirements.txt") || dependencyFiles.includes("requirements-dev.txt")) managers.add("pip");
-  if (dependencyFiles.includes("pyproject.toml") && lockFiles.length === 0) managers.add("pyproject");
+  const hasRequirements = dependencyFiles.includes("requirements.txt") || dependencyFiles.includes("requirements-dev.txt");
+  if (hasRequirements) managers.add("pip");
+  // A project may keep package metadata and an unpinned dependency list in
+  // pyproject.toml while using requirements.txt as its actual installer input.
+  if (dependencyFiles.includes("pyproject.toml") && lockFiles.length === 0 && !hasRequirements) managers.add("pyproject");
   const findings: string[] = [];
   if (managers.size > 1) findings.push("Multiple Python package manager inputs found; select the authoritative lockfile.");
   if (lockFiles.length === 0) findings.push("No Python lockfile found; dependency resolution may not be reproducible.");

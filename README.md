@@ -44,6 +44,8 @@ dockpack deploy import|up|down|status|logs|backup|restore <archive>
 
 Python dependency collection currently supports `requirements.txt` through pip; Node.js collection supports npm `package-lock.json`. Other package managers are detected and reported but rejected by bundle creation until their offline cache adapters are implemented.
 
+`dockpack pack dev` prints progress and elapsed time for each packaging stage. Docker image pulls, Python/Node dependency collection, Compose image builds, and image export stream their command output so long-running work remains visible.
+
 ## Portable project state
 
 `dockpack dev init` writes local state under `.dockpack/`. The generated `.dockpack/compose.dev.yaml` uses `${DOCKPACK_PROJECT_DIR}` for the source mount; Dockpack sets it to the project path for each Compose invocation. The machine-local dependency cache is mounted only by a temporary `.dockpack/compose.install.yaml` during `dev init` or `dev rebuild`, then removed. No cache or source absolute path is persisted in the overlay or state file.

@@ -59,7 +59,7 @@ export async function collectPython(projectDir: string, cacheDir: string, image:
     "--mount", `type=bind,source=${mountPath(cacheDir)},target=/cache`,
     "--workdir", "/workspace", image,
     "python", "-m", "pip", "download", "--dest", "/cache/python", "-r", requirements,
-  ]);
+  ], { streamOutput: true });
   return { ecosystem: "python", runtimeImage: image, lockDigest: await sha256Files(projectDir, [requirements]), lockFiles: [requirements] };
 }
 
@@ -80,7 +80,7 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
       "--mount", `type=bind,source=${mountPath(scratch)},target=/manifest`,
       "--mount", `type=bind,source=${mountPath(npmCache)},target=/cache`,
       "--workdir", "/manifest", image, "npm", "ci", "--cache", "/cache", "--ignore-scripts",
-    ]);
+    ], { streamOutput: true });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

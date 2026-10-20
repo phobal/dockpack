@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
@@ -78,6 +78,17 @@ export async function readManifest(bundlePath: string): Promise<BundleManifest> 
 
 export async function extractArchive(bundlePath: string, destination?: string): Promise<string> {
   const bundle = path.resolve(bundlePath);
+  let bundleStat;
+  try {
+    bundleStat = await stat(bundle);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new DockpackError(`Bundle archive not found: ${bundlePath}`);
+    throw error;
+  }
+  if (bundleStat.isDirectory()) {
+    throw new DockpackError(`Bundle path is a directory: ${bundlePath}. Expected a Dockpack .tar.gz archive created with 'dockpack pack dev --output <archive.tar.gz>'.`);
+  }
+  if (!bundleStat.isFile()) throw new DockpackError(`Bundle path is not a regular archive file: ${bundlePath}`);
   const temporary = destination ? path.resolve(destination) : await mkdtemp(path.join(os.tmpdir(), "dockpack-verify-"));
   await mkdir(temporary, { recursive: true });
   const entries: Array<{ path: string; type: string }> = [];
