@@ -72,7 +72,6 @@ export async function detectNode(projectDir: string): Promise<EcosystemDetection
   const metadata = JSON.parse(await readFile(packagePath, "utf8")) as PackageMetadata;
   const lockMap: Record<string, string> = {
     "package-lock.json": "npm",
-    "npm-shrinkwrap.json": "npm",
     "pnpm-lock.yaml": "pnpm",
     "yarn.lock": "yarn",
   };
