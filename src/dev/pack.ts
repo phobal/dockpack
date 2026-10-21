@@ -11,7 +11,7 @@ import { createArchive } from "../bundles/archive.js";
 import { makeManifest } from "../bundles/manifest.js";
 import { DockerRunner } from "../docker/runner.js";
 import { detectProject } from "../project/detect.js";
-import { stringify } from "yaml";
+import { stringify, YAMLSeq } from "yaml";
 import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
 
 function elapsed(milliseconds: number): string {
@@ -56,7 +56,8 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
   const { config, platform, detections, compose } = await progress("Checking project configuration and Docker", async () => {
     const config = await readConfig(path.join(root, ".dockpack.yaml"));
     if (!docker.available()) throw new DockpackError("Docker CLI and a running daemon are required to create a development bundle.");
-    const platform = docker.platform().id;
+    const platform = config.target.dev_platform === "auto" ? docker.platform().id : config.target.dev_platform;
+    console.log(`[dockpack] Development target platform: ${platform}`);
     const detections = await detectProject(root);
     if (detections.length === 0) throw new DockpackError("No supported Python or Node.js dependency files were detected.");
     for (const item of detections) {
@@ -83,16 +84,9 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       await progress(`Pulling ${detection.ecosystem} runtime image ${image}`, () => docker.pull(image, platform, true));
       images.add(image);
       const dependency = await progress(`Collecting ${detection.ecosystem} offline dependencies`, () => detection.ecosystem === "python"
-        ? collectPython(root, cacheDir, image, docker)
-        : collectNpm(root, cacheDir, image, docker));
+        ? collectPython(root, cacheDir, image, docker, platform)
+        : collectNpm(root, cacheDir, image, docker, platform));
       dependencies.push(dependency);
-    }
-
-    // Production images may use a different base architecture than this
-    // development host. Cache project Dockerfile bases for the amd64 build.
-    for (const baseImage of await dockerfileBaseImages(path.join(root, "Dockerfile"))) {
-      await progress(`Pulling Dockerfile base image ${baseImage} (linux/amd64)`, () => docker.pull(baseImage, "linux/amd64", true));
-      images.add(baseImage);
     }
 
     const infrastructure = compose.services.filter((service) => service.name !== config.application.service
@@ -103,11 +97,29 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       if (!composeCommand) throw new DockpackError("Docker Compose is required to build Compose infrastructure services.");
       const overrideServices: Record<string, Record<string, unknown>> = {};
       for (const service of buildServices) {
+        let buildPlatforms: YAMLSeq | undefined;
+        if (typeof service.build === "object" && service.build !== null && "platforms" in service.build) {
+          const version = composeCommand.version.match(/v?(\d+)\.(\d+)\.(\d+)/);
+          const [major, minor, patch] = version ? version.slice(1).map(Number) : [];
+          if (composeCommand.prefix[0] !== "docker" || major === undefined || minor === undefined || patch === undefined
+            || major < 2 || (major === 2 && (minor < 24 || (minor === 24 && patch < 4)))) {
+            throw new DockpackError(`Service '${service.name}' sets build.platforms. Docker Compose 2.24.4 or newer is required to override this list with target.dev_platform; upgrade Compose or remove build.platforms.`);
+          }
+          // Compose appends ordinary lists; !override replaces the configured list.
+          buildPlatforms = new YAMLSeq();
+          buildPlatforms.tag = "!override";
+          buildPlatforms.items.push(platform);
+        }
         const slug = `${config.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
         const tag = typeof service.image === "string" ? service.image : `dockpack/${slug}:offline`;
         overrideServices[service.name] = {
           image: tag,
-          build: { ...(typeof service.build === "object" ? service.build as Record<string, unknown> : {}), network: "default" },
+          platform,
+          build: {
+            ...(typeof service.build === "string" ? { context: service.build } : service.build as Record<string, unknown>),
+            ...(buildPlatforms ? { platforms: buildPlatforms } : {}),
+            network: "default",
+          },
         };
         images.add(tag);
       }
@@ -118,7 +130,13 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       composeArgs.push("-f", overrideFile);
       if (composeCommand.prefix[0] === "docker") for (const profile of config.compose.profiles) composeArgs.push("--profile", profile);
       await progress(`Building Compose services: ${buildServices.map((service) => service.name).join(", ")}`, () =>
-        runCompose([...composeArgs, "build", ...buildServices.map((service) => service.name)], root, process.env, { streamOutput: true }));
+        runCompose([...composeArgs, "build", ...buildServices.map((service) => service.name)], root,
+          { ...docker.buildEnvironment(), DOCKER_DEFAULT_PLATFORM: platform }, { streamOutput: true }));
+      for (const service of buildServices) {
+        const image = String(overrideServices[service.name]!.image);
+        const builtPlatform = docker.imagePlatform(image);
+        if (builtPlatform !== platform) throw new DockpackError(`Built image ${image} for '${service.name}' is ${builtPlatform}; development bundle needs ${platform}.`);
+      }
       await (await import("node:fs/promises")).rm(overrideFile, { force: true });
     }
     for (const service of infrastructure) {
@@ -149,6 +167,26 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       }
       images.add(service.image);
     }
+    const findings: string[] = [];
+    const developmentImages = new Set(images);
+    // Preserve the development architecture when a production base reuses its tag.
+    for (const baseImage of await dockerfileBaseImages(path.join(root, "Dockerfile"))) {
+      const productionPlatform = config.target.production_platform;
+      if (platform !== productionPlatform && images.has(baseImage)) {
+        const finding = `Production base image ${baseImage} (${productionPlatform}) shares a development image tag (${platform}); keeping the development image. Prepare the production base separately before an offline production build.`;
+        findings.push(finding);
+        console.warn(`[dockpack] ${finding}`);
+        continue;
+      }
+      await progress(`Pulling Dockerfile base image ${baseImage} (${productionPlatform})`, () => docker.pull(baseImage, productionPlatform, true));
+      images.add(baseImage);
+    }
+    for (const image of developmentImages) {
+      const actual = docker.imagePlatform(image);
+      if (actual !== platform) {
+        throw new DockpackError(`Development image ${image} is ${actual}; expected ${platform}. Ensure production base images do not overwrite development image tags, then create the bundle again.`);
+      }
+    }
     if (images.size > 0) {
       await progress(`Exporting ${images.size} Docker images`, () => docker.save([...images], path.join(imagesDir, "images.tar"), true));
     }
@@ -161,6 +199,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       images: [...images],
       dependencies: Object.fromEntries(dependencies.map((item) => [item.ecosystem, item.lockDigest])),
       services: infrastructure.map((service) => service.name),
+      findings,
     });
     await progress(`Writing bundle archive ${path.resolve(outputPath)}`, () => createArchive(stage, outputPath, manifest));
     console.log(`[dockpack] Development bundle completed in ${elapsed(Date.now() - totalStarted)}.`);

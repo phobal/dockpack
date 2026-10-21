@@ -162,7 +162,7 @@ dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.ta
 
 ## 命令一览
 
-```text
+```bash
 dockpack init [project-directory]
 dockpack pack dev [project-directory] --output <archive>
 dockpack pack inspect <archive>
@@ -181,6 +181,22 @@ dockpack deploy restore <archive> --backup <archive> [--overwrite]
 `pack inspect` 和 `prod inspect` 会校验归档路径及校验和，然后输出包的元数据。`dockpack import` 是通用的镜像导入命令；开发环境应使用 `dev init`，它还会安装依赖并写入项目状态。生产部署命令则会管理部署目录和 Compose 服务。
 
 ## 项目发现与配置
+
+在 `.dockpack.yaml` 中分别设置开发包和生产包的容器目标平台：
+
+```yaml
+target:
+  dev_platform: linux/arm64
+  production_platform: linux/amd64
+```
+
+`target.dev_platform` 支持 `linux/amd64`、`linux/arm64` 和 `auto`。默认值为 `auto`，打包时使用当前 Docker daemon 的平台；旧配置没有该字段时也按 `auto` 处理。`dockpack init` 新生成的配置会显式写入 `dev_platform: auto`。
+
+`pack dev` 使用选定的平台拉取运行时与基础服务镜像、运行 Python/npm 依赖收集容器、构建 Compose 服务，并将该平台写入开发包清单。跨架构打包要求联网机器的 Docker 能执行目标架构容器（例如已配置相应的模拟执行支持）。离线端 `dev init` 会核对显式配置、包清单与 Docker daemon 的平台，生成的开发 Compose 配置也会使用包内目标平台。变更开发平台后，需要在联网环境重新打包，并在离线机器重新执行 `dev init --bundle ...`。
+
+如果 Compose 服务已配置 `build.platforms`，dockpack 会将该列表替换为开发目标平台，避免构建其他架构。这种情况需要 [Docker Compose 2.24.4 或更新版本](https://docs.docker.com/reference/compose-file/merge/#replace-value)；旧版本需升级 Compose 或移除该服务的 `build.platforms` 配置。
+
+开发平台与生产平台不同、且根目录 Dockerfile 的生产基础镜像复用了开发镜像标签时，打包会保留开发架构的镜像并输出警告；对应生产基础镜像需要在离线生产构建前另行准备，避免同一标签被其他架构覆盖。`production_platform` 当前仍只支持 `linux/amd64`。这里的 `linux/arm64` 是容器平台名称；CLI 离线运行包中的 `linux-arm64` 则表示运行 dockpack 的主机平台。
 
 `dockpack init` 会分析项目，并且只在 `.dockpack.yaml` 不存在时创建配置文件。它会报告检测到的 Python/Node.js 运行时、Compose 服务和需要关注的问题；如果配置文件已存在，则会保留原文件。Compose 发现逻辑会检查项目根目录中的标准文件名，也会向下检查最多四层目录，寻找唯一且明确的嵌套项目。如果发现多个嵌套项目，请在 `compose.files` 中指定配置文件。
 

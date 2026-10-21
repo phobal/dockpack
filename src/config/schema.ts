@@ -32,6 +32,7 @@ export const dockpackConfigSchema = z.object({
     dev_port: z.number().int().min(1).max(65535).nullable().default(null),
   }).strict().default({}),
   target: z.object({
+    dev_platform: z.enum(["auto", "linux/amd64", "linux/arm64"]).default("auto"),
     production_platform: z.string().default("linux/amd64"),
   }).strict().default({}),
   compose: composeConfigSchema.default({}),

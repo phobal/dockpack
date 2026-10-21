@@ -48,13 +48,13 @@ function mountPath(hostPath: string): string {
   return absolute;
 }
 
-export async function collectPython(projectDir: string, cacheDir: string, image: string, docker: DockerRunner): Promise<CollectedDependency> {
+export async function collectPython(projectDir: string, cacheDir: string, image: string, docker: DockerRunner, platform: string): Promise<CollectedDependency> {
   const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(projectDir, name)));
   if (!requirements) throw new DockpackError("Python dependency collection currently requires requirements.txt or requirements-dev.txt.");
   const wheelhouse = path.join(cacheDir, "python");
   await mkdir(wheelhouse, { recursive: true });
   docker.run([
-    "run", "--rm", "--platform", docker.platform().id,
+    "run", "--rm", "--platform", platform,
     "--mount", `type=bind,source=${mountPath(projectDir)},target=/workspace,readonly`,
     "--mount", `type=bind,source=${mountPath(cacheDir)},target=/cache`,
     "--workdir", "/workspace", image,
@@ -63,7 +63,7 @@ export async function collectPython(projectDir: string, cacheDir: string, image:
   return { ecosystem: "python", runtimeImage: image, lockDigest: await sha256Files(projectDir, [requirements]), lockFiles: [requirements] };
 }
 
-export async function collectNpm(projectDir: string, cacheDir: string, image: string, docker: DockerRunner): Promise<CollectedDependency> {
+export async function collectNpm(projectDir: string, cacheDir: string, image: string, docker: DockerRunner, platform: string): Promise<CollectedDependency> {
   if (!existsSync(path.join(projectDir, "package-lock.json"))) {
     throw new DockpackError("Node.js dependency collection currently requires npm package-lock.json.");
   }
@@ -74,7 +74,7 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
     await copyFile(path.join(projectDir, "package.json"), path.join(scratch, "package.json"));
     await copyFile(path.join(projectDir, "package-lock.json"), path.join(scratch, "package-lock.json"));
     docker.run([
-      "run", "--rm", "--platform", docker.platform().id,
+      "run", "--rm", "--platform", platform,
       // npm ci creates node_modules in its working directory, so this isolated
       // temporary manifest mount must be writable (the project source is never mounted here).
       "--mount", `type=bind,source=${mountPath(scratch)},target=/manifest`,

@@ -54,8 +54,12 @@ async function readState(projectDir: string): Promise<ProjectState> {
 async function writeOverlay(root: string, state: ProjectState, version: string, configOverride?: Awaited<ReturnType<typeof readConfig>>): Promise<void> {
   const config = configOverride ?? await readConfig(path.join(root, ".dockpack.yaml"));
   const bundleRoot = bundleCachePath(state.bundle_id);
-  const manifest = JSON.parse(await readFile(path.join(bundleRoot, "manifest.json"), "utf8")) as { images: string[] };
+  const manifest = JSON.parse(await readFile(path.join(bundleRoot, "manifest.json"), "utf8")) as { images: string[]; services: string[]; target_platform: string };
+  if (config.target.dev_platform !== "auto" && config.target.dev_platform !== manifest.target_platform) {
+    throw new DockpackError(`target.dev_platform is ${config.target.dev_platform}, but the development bundle targets ${manifest.target_platform}. Import a matching development bundle with 'dockpack dev init'.`);
+  }
   const services: Record<string, unknown> = {};
+  for (const service of manifest.services) services[service] = { platform: manifest.target_platform };
   const volumes: Record<string, { name: string }> = {};
   for (const ecosystem of config.project.ecosystems) {
     const serviceName = `dockpack-dev-${ecosystem}`;
@@ -69,6 +73,7 @@ async function writeOverlay(root: string, state: ProjectState, version: string, 
     state.dependency_volumes[ecosystem] = dockerVolume;
     services[serviceName] = {
       image,
+      platform: manifest.target_platform,
       working_dir: "/workspace",
       command: config.application.dev_command.length > 0 ? config.application.dev_command : ["sleep", "infinity"],
       ...(config.application.dev_port ? { ports: [`${config.application.dev_port}:${config.application.dev_port}`] } : {}),
@@ -177,6 +182,9 @@ export async function initializeDevProject(projectDir: string, bundlePath: strin
       bundle_kind: string; project_name: string; target_platform: string; dependencies: Record<string, string>;
     };
     if (manifest.bundle_kind !== "dev") throw new DockpackError("The supplied archive is not a development bundle.");
+    if (config.target.dev_platform !== "auto" && config.target.dev_platform !== manifest.target_platform) {
+      throw new DockpackError(`target.dev_platform is ${config.target.dev_platform}, but the development bundle targets ${manifest.target_platform}. Use a matching bundle or update .dockpack.yaml.`);
+    }
     const missingEcosystems = config.project.ecosystems.filter((ecosystem) => !manifest.dependencies[ecosystem]);
     if (missingEcosystems.length) throw new DockpackError(`Bundle is missing dependencies for: ${missingEcosystems.join(", ")}`);
     const docker = new DockerRunner();
