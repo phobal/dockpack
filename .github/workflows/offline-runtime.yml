@@ -1,0 +1,86 @@
+name: Build offline runtime packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: win32-x64
+            runner: windows-2022
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Check release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) process.exit(1)'
+      - run: npm run build:offline -- --target ${{ matrix.target }}
+      - name: Check POSIX archive and launcher
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          name="dockpack-cli-$version-${{ matrix.target }}"
+          (cd release && shasum -a 256 -c "$name.tar.gz.sha256")
+          destination="$RUNNER_TEMP/offline runtime"
+          mkdir -p "$destination"
+          tar -xzf "release/$name.tar.gz" -C "$destination"
+          cd "$destination/$name"
+          shasum -a 256 -c checksums.sha256
+          test "$(./dockpack --version)" = "$version"
+          ./dockpack --help
+          set +e
+          ./dockpack nonexistent-command
+          status=$?
+          set -e
+          test "$status" -eq 1
+      - name: Check Windows archive and launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = node -p 'require("./package.json").version'
+          $name = "dockpack-cli-$version-${{ matrix.target }}"
+          $expected = (Get-Content "release/$name.zip.sha256").Split(' ')[0]
+          if ((Get-FileHash "release/$name.zip" -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw "Archive checksum mismatch" }
+          $destination = Join-Path $env:RUNNER_TEMP 'offline runtime'
+          Expand-Archive "release/$name.zip" $destination -Force
+          Set-Location "$destination/$name"
+          foreach ($line in Get-Content checksums.sha256) {
+            $hash, $file = $line -split '  ', 2
+            if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLower() -ne $hash) { throw "Checksum mismatch: $file" }
+          }
+          $actual = & .\dockpack.cmd --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $version) { throw "CLI version mismatch" }
+          & .\dockpack.cmd --help
+          if ($LASTEXITCODE -ne 0) { throw "CLI help failed" }
+          & .\dockpack.cmd nonexistent-command
+          if ($LASTEXITCODE -ne 1) { throw "CLI exit code was not preserved" }
+          exit 0
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dockpack-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error

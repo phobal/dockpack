@@ -4,12 +4,12 @@
 
 dockpack 的开发包和生产包用于网络隔离环境，但当前这些归档不包含 dockpack 自身。离线端在执行 `dev init`、`deploy up` 等命令前，需要另外安装 dockpack。npm 安装无法用于没有网络的机器；仅复制当前 npm tarball 也不够，因为命令需要 Node.js 和 `commander`、`tar`、`yaml`、`zod` 等运行依赖。
 
-目标用户不能保证预装 Node.js。已确认需支持的 dockpack 主机平台为 Linux x64、Windows x64、macOS x64 和 macOS arm64。生产容器当前固定为 `linux/amd64`，但这不决定运行 dockpack 的主机平台。
+目标用户不能保证预装 Node.js。已确认需支持的 dockpack 主机平台为 Linux x64、Linux arm64、Windows x64、macOS x64 和 macOS arm64。生产容器当前固定为 `linux/amd64`，但这不决定运行 dockpack 的主机平台。
 
 ## 目标
 
 - 提供不需要网络、不需要预装 Node.js、可直接运行的 dockpack 离线运行包。
-- 覆盖 Linux x64、Windows x64、macOS x64、macOS arm64。
+- 覆盖 Linux x64、Linux arm64、Windows x64、macOS x64、macOS arm64。
 - 让用户能在联网环境获取并转运运行包，在离线主机解压后使用现有 dockpack 命令。
 - 保持项目开发包和生产包聚焦于项目数据，不重复携带所有平台的 Node.js 运行时。
 - 正确报告工具版本、包格式版本和不兼容情况。
@@ -37,6 +37,7 @@ dockpack 的开发包和生产包用于网络隔离环境，但当前这些归�
 | 平台 | 文件名 | 归档格式 |
 | --- | --- | --- |
 | Linux x64 | `dockpack-cli-<version>-linux-x64.tar.gz` | tar.gz |
+| Linux arm64 | `dockpack-cli-<version>-linux-arm64.tar.gz` | tar.gz |
 | Windows x64 | `dockpack-cli-<version>-win32-x64.zip` | zip |
 | macOS x64 | `dockpack-cli-<version>-darwin-x64.tar.gz` | tar.gz |
 | macOS arm64 | `dockpack-cli-<version>-darwin-arm64.tar.gz` | tar.gz |
@@ -68,7 +69,7 @@ CLI 启动器不尝试联网，也不自动访问 npm。Docker/Compose 缺失、
 
 ## 构建与验证
 
-发布流程生成四个平台的运行包，并检查每个包包含正确平台的 Node.js 文件、捆绑的 CLI、启动器、许可证和校验文件。构建过程应固定 Node.js 运行时版本，并记录版本及其来源，避免同一 dockpack 版本的运行包包含漂移的 Node.js 版本。
+发布流程生成五个平台的运行包，并检查每个包包含正确平台的 Node.js 文件、捆绑的 CLI、启动器、许可证和校验文件。构建过程应固定 Node.js 运行时版本，并记录版本及其来源，避免同一 dockpack 版本的运行包包含漂移的 Node.js 版本。
 
 每个平台的发布检查至少包括：
 

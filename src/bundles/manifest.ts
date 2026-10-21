@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { DockpackError } from "../errors.js";
+import { VERSION } from "../version.js";
 
 export const bundleManifestSchema = z.object({
   schema_version: z.literal(1),
@@ -21,6 +23,18 @@ export const bundleManifestSchema = z.object({
 }).strict();
 
 export type BundleManifest = z.infer<typeof bundleManifestSchema>;
+
+export function parseBundleManifest(value: unknown): BundleManifest {
+  const schemaVersion = value && typeof value === "object" && "schema_version" in value
+    ? value.schema_version : undefined;
+  if (typeof schemaVersion === "number" && schemaVersion !== 1) {
+    throw new DockpackError(
+      `Bundle schema version ${schemaVersion} is not supported by dockpack ${VERSION} (supported: 1). ` +
+      "Transfer a compatible dockpack offline runtime package from a connected machine.",
+    );
+  }
+  return bundleManifestSchema.parse(value);
+}
 
 type NewManifest = Omit<BundleManifest, "schema_version" | "created_at" | "members" | "findings" | "required_config" | "persistent_volumes">
   & Partial<Pick<BundleManifest, "findings" | "required_config" | "persistent_volumes">>;

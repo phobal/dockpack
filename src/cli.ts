@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { VERSION } from "./version.js";
 import { inspectArchive } from "./bundles/archive.js";
 import { bundleCachePath, bundleFingerprint, extractArchive } from "./bundles/archive.js";
 import { initializeProject } from "./commands/init.js";
@@ -13,7 +14,7 @@ import { buildProductionBundle } from "./prod/build.js";
 import { backupProduction, downProduction, importProductionBundle, logsProduction, restoreProduction, statusProduction, upProduction } from "./prod/deploy.js";
 
 const program = new Command();
-program.name("dockpack").description("Prepare projects for offline Docker development and deployment").version("0.1.0");
+program.name("dockpack").description("Prepare projects for offline Docker development and deployment").version(VERSION);
 
 program.command("init")
   .description("Analyze a project and create .dockpack.yaml")
@@ -37,6 +38,7 @@ pack.command("dev")
   .action(async (projectDirectory: string, options: { output: string }) => {
     await createDevelopmentBundle(projectDirectory, options.output);
     console.log(`Created development bundle: ${options.output}`);
+    console.log(offlineRuntimeHint());
   });
 pack.command("inspect")
   .description("Verify and summarize an offline bundle")
@@ -83,6 +85,7 @@ build.command("prod").argument("[project-directory]", "project root", ".").requi
   .action(async (projectDirectory: string, options: { output: string }) => {
     await buildProductionBundle(projectDirectory, options.output);
     console.log(`Created production bundle: ${options.output}`);
+    console.log(offlineRuntimeHint());
   });
 
 const prod = program.command("prod").description("Inspect production bundles");
@@ -114,6 +117,8 @@ for (const action of ["import", "up", "down", "status", "logs", "backup", "resto
 async function printManifest(bundlePath: string): Promise<void> {
   const manifest = await inspectArchive(bundlePath);
   console.log(`Bundle kind: ${manifest.bundle_kind}`);
+  console.log(`Bundle schema: ${manifest.schema_version}`);
+  console.log(`Created with dockpack: ${manifest.dockpack_version}`);
   console.log(`Project: ${manifest.project_name}`);
   console.log(`Target: ${manifest.target_platform}`);
   console.log(`Images: ${manifest.images.join(", ") || "none"}`);
@@ -127,3 +132,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   console.error(`dockpack: error: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 2;
 });
+
+function offlineRuntimeHint(): string {
+  return `Offline host without Node.js: also transfer dockpack-cli-${VERSION}-<host-platform> (linux-x64, linux-arm64, win32-x64, darwin-x64 or darwin-arm64). Select the host OS, not the Docker image platform.`;
+}

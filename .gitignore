@@ -3,3 +3,6 @@ dist/
 *.tgz
 .dockpack/
 .npm-cache/
+release/
+.offline-build/
+.offline-cache/

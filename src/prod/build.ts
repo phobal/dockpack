@@ -1,4 +1,5 @@
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -214,7 +215,7 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
       await mkdir(path.join(stage, "images"), { recursive: true });
       docker.save([...images], path.join(stage, "images", "images.tar"));
       const manifest = makeManifest({
-        bundle_kind: "prod", dockpack_version: "0.1.0", project_name: config.project.name,
+        bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
         target_platform: TARGET, images: [...images], dependencies: {}, services: [appService],
         required_config: [...requiredConfig], persistent_volumes: [], findings,
       });
@@ -385,7 +386,7 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
     await mkdir(path.join(stage, "images"), { recursive: true });
     docker.save([...images], path.join(stage, "images", "images.tar"));
     const manifest = makeManifest({
-      bundle_kind: "prod", dockpack_version: "0.1.0", project_name: config.project.name,
+      bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
       target_platform: TARGET, images: [...images], dependencies: {},
       services: Object.keys(services).filter((name) => !config.compose.exclude_services.includes(name)),
       findings, required_config: [...requiredConfig], persistent_volumes: [...persistentVolumes],

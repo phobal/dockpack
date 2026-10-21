@@ -29,7 +29,8 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "build:offline": "npm run build && node scripts/build-offline.mjs"
   },
   "dependencies": {
     "commander": "^13.1.0",
@@ -39,6 +40,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
     "typescript": "^5.8.0"
   }
 }

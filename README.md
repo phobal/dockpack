@@ -6,7 +6,7 @@ dockpack 负责打包和环境生命周期管理，不负责在机器之间同�
 
 ## 环境要求
 
-- 运行或开发命令行工具需要 Node.js 20 或更高版本。
+- 通过 npm 安装或从源码开发命令行工具需要 Node.js 20 或更高版本。离线运行包自带 Node.js，无需预装 Node.js 或 npm。
 - 创建、导入或运行离线包需要 Docker CLI 和正在运行的 Docker 后台服务（daemon）。
 - 使用 Compose 的项目，以及开发和部署生命周期命令，需要 Docker Compose v2（`docker compose`）或旧版 Compose（`docker-compose`）。
 - 生产打包所用的 Docker daemon 必须能够构建 Linux 容器。当前生产包目标平台为 `linux/amd64`。
@@ -27,6 +27,67 @@ node dist/cli.js --help
 npm install --global dockpack-cli
 dockpack --help
 ```
+
+### 无网络、未安装 Node.js 的机器
+
+先在联网机器上取得对应主机平台的离线运行包和旁边的 `.sha256` 校验文件，再与项目离线包一起传入离线环境。运行包需要完整解压，不能只复制启动脚本。项目源码也需要另行传输。
+
+| 离线主机 | 运行包名称 |
+| --- | --- |
+| Linux x64 | `dockpack-cli-<版本>-linux-x64.tar.gz` |
+| Linux ARM64/aarch64 | `dockpack-cli-<版本>-linux-arm64.tar.gz` |
+| Windows x64 | `dockpack-cli-<版本>-win32-x64.zip` |
+| macOS Intel | `dockpack-cli-<版本>-darwin-x64.tar.gz` |
+| macOS Apple Silicon | `dockpack-cli-<版本>-darwin-arm64.tar.gz` |
+
+这些是同一版本的五个发行附件，npm 包仍只发布一次。选择的是运行 dockpack 的主机平台，不是 Docker 容器平台。例如在 Apple Silicon Mac 上操作 Linux 容器，应选择 `darwin-arm64`。
+
+Linux ARM64 运行包适用于 ARM64/aarch64 主机。项目生产包当前以 `linux/amd64` 为目标，部署时要求 Docker daemon 的平台与项目包匹配；ARM64 生产镜像尚未支持。
+
+Linux/macOS 示例（将版本和平台替换为实际值）：
+
+```sh
+# macOS 使用 shasum；Linux 也可以使用 sha256sum -c
+shasum -a 256 -c dockpack-cli-0.1.0-darwin-arm64.tar.gz.sha256
+tar -xzf dockpack-cli-0.1.0-darwin-arm64.tar.gz
+./dockpack-cli-0.1.0-darwin-arm64/dockpack --version
+./dockpack-cli-0.1.0-darwin-arm64/dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
+```
+
+Windows PowerShell 示例：
+
+```powershell
+Get-FileHash .\dockpack-cli-0.1.0-win32-x64.zip -Algorithm SHA256
+# 将输出与同名 .zip.sha256 文件内的值核对后解压
+Expand-Archive .\dockpack-cli-0.1.0-win32-x64.zip -DestinationPath .\tools
+.\tools\dockpack-cli-0.1.0-win32-x64\dockpack.cmd --version
+.\tools\dockpack-cli-0.1.0-win32-x64\dockpack.cmd dev init .\my-project --bundle .\my-project-dev.tar.gz
+```
+
+运行包内有启动器、`runtime/` 下的 Node.js、`app/` 下的 CLI、许可证、平台元数据 `runtime.json` 和文件校验清单。可以将解压后的运行包根目录加入 PATH，之后直接使用 `dockpack`。启动器会调用内置 Node.js，不访问 npm，也不会自动下载依赖。Docker CLI、daemon 和 Compose 仍需预先准备。
+
+当前内置 Node.js 24.22.0，其[系统要求](https://github.com/nodejs/node/blob/v24.22.0/BUILDING.md#platform-list)为：Linux x64/arm64 内核 >= 4.18、glibc >= 2.28；Windows x64 >= Windows 10/Server 2016；macOS >= 13.5。Linux 使用官方 glibc 构建，不适用于 Alpine/musl。macOS 包目前没有额外的应用签名/公证，需按企业的可执行文件分发策略部署。生产卷备份和恢复仍只支持本地 Linux Docker 主机。
+
+### 构建离线运行包（维护者）
+
+```sh
+npm ci
+npm run build:offline
+# 或只生成一个平台
+npm run build:offline -- --target darwin-arm64
+# Linux ARM64
+npm run build:offline -- --target linux-arm64
+# 指定输出目录
+npm run build:offline -- --target linux-x64 --output ./release
+```
+
+此命令在联网机器上将 CLI 及其 npm 生产依赖打包为单文件，并下载已固定版本的官方 Node.js 归档。Node.js 版本、下载来源和五个平台的 SHA-256 固定在 `scripts/offline-runtime.json`；每次使用缓存也会校验哈希。更新运行时需同步更新版本、文件名和校验值，官方校验文件位于 `https://nodejs.org/dist/v<版本>/SHASUMS256.txt`。
+
+产物默认写入 `release/`，每个平台生成一个压缩包和一个 `.sha256` 文件。下载缓存位于 `.offline-cache/`，临时构建目录为 `.offline-build/`，这些目录不进入 Git 或 npm 发布包。运行包包含 dockpack、Node.js 和已捆绑第三方依赖的许可证文本。
+
+仓库的 **Build offline runtime packages** GitHub Actions 工作流支持手动执行或通过 `v<版本>` 标签触发，在五种原生主机上构建、核对校验和并检查启动器。完成后，从 Actions 产物中取得五套文件，作为同一个 GitHub Release 的附件或放到企业内部下载站；工作流不会自动发布 npm 包或创建 Release。
+
+CLI 版本和项目包的 `dockpack_version` 都取自 `package.json`。项目归档按 `schema_version` 判断兼容性，支持的旧格式无需与 CLI 版本号完全相等；遇到不支持的格式时，CLI 会提示转运兼容的离线运行包。
 
 ## 常见工作流程
 

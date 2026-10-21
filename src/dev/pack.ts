@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -154,7 +155,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
 
     const manifest = makeManifest({
       bundle_kind: "dev",
-      dockpack_version: "0.1.0",
+      dockpack_version: VERSION,
       project_name: config.project.name,
       target_platform: platform,
       images: [...images],

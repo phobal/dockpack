@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { DockpackError } from "../errors.js";
-import { bundleManifestSchema, type BundleManifest } from "./manifest.js";
+import { parseBundleManifest, type BundleManifest } from "./manifest.js";
 
 const RESERVED = new Set(["manifest.json", "checksums.sha256"]);
 
@@ -48,7 +48,7 @@ export async function createArchive(stageDir: string, outputPath: string, initia
     const content = await digestFile(path.join(root, name));
     members.push({ path: name, ...content });
   }
-  const manifest = bundleManifestSchema.parse({ ...initial, members });
+  const manifest = parseBundleManifest({ ...initial, members });
   await writeFile(path.join(root, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
   await writeFile(path.join(root, "checksums.sha256"), `${members.map((member) => `${member.sha256}  ${member.path}`).join("\n")}\n`, { flag: "wx" });
   const temporaryDir = await mkdtemp(path.join(path.dirname(output), ".dockpack-"));
@@ -68,7 +68,7 @@ export async function createArchive(stageDir: string, outputPath: string, initia
 export async function readManifest(bundlePath: string): Promise<BundleManifest> {
   const directory = await extractArchive(bundlePath);
   try {
-    return bundleManifestSchema.parse(JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")));
+    return parseBundleManifest(JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")));
   } catch (error) {
     throw new DockpackError(`Cannot read bundle manifest: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   } finally {
@@ -103,7 +103,7 @@ export async function extractArchive(bundlePath: string, destination?: string): 
       seen.add(name);
     }
     await tar.extract({ file: bundle, cwd: temporary, strict: true });
-    const manifest = bundleManifestSchema.parse(JSON.parse(await readFile(path.join(temporary, "manifest.json"), "utf8")));
+    const manifest = parseBundleManifest(JSON.parse(await readFile(path.join(temporary, "manifest.json"), "utf8")));
     const expected = new Map(manifest.members.map((member) => [member.path, member]));
     for (const entry of entries) {
       const name = entry.path;
@@ -133,7 +133,7 @@ export async function extractArchive(bundlePath: string, destination?: string): 
 export async function inspectArchive(bundlePath: string): Promise<BundleManifest> {
   const directory = await extractArchive(bundlePath);
   try {
-    const manifest = bundleManifestSchema.parse(JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")));
+    const manifest = parseBundleManifest(JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")));
     return manifest;
   } finally {
     await rm(directory, { recursive: true, force: true });
