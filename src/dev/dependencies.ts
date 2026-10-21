@@ -48,6 +48,28 @@ function mountPath(hostPath: string): string {
   return absolute;
 }
 
+// Some npm versions report fatal errors (including "Exit handler never called!")
+// with status 0. Require an actual npm ci completion summary as well as status.
+const checkedNpmInstall = String.raw`
+const { spawnSync } = require("node:child_process");
+const result = spawnSync("npm", ["ci", "--json", "--no-audit", "--no-fund",
+  "--update-notifier=false", ...process.argv.slice(1)], {
+  encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+let completed = false;
+try {
+  const summary = JSON.parse(result.stdout || "");
+  completed = Number.isInteger(summary.added) && summary.added >= 0 && !summary.error;
+} catch {}
+if (result.error || result.status !== 0 || !completed || /^npm\s+(?:error|ERR!)(?:\s|$)/m.test(result.stderr || "")) {
+  console.error("dockpack: npm ci did not complete successfully; refusing to use an incomplete dependency cache.");
+  if (result.error) console.error(result.error.message);
+  process.exit(1);
+}
+`;
+
 export async function collectPython(projectDir: string, cacheDir: string, image: string, docker: DockerRunner, platform: string): Promise<CollectedDependency> {
   const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(projectDir, name)));
   if (!requirements) throw new DockpackError("Python dependency collection currently requires requirements.txt or requirements-dev.txt.");
@@ -71,16 +93,32 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
   const npmCache = path.join(cacheDir, "npm");
   await mkdir(npmCache, { recursive: true });
   try {
-    await copyFile(path.join(projectDir, "package.json"), path.join(scratch, "package.json"));
-    await copyFile(path.join(projectDir, "package-lock.json"), path.join(scratch, "package-lock.json"));
-    docker.run([
-      "run", "--rm", "--platform", platform,
-      // npm ci creates node_modules in its working directory, so this isolated
-      // temporary manifest mount must be writable (the project source is never mounted here).
-      "--mount", `type=bind,source=${mountPath(scratch)},target=/manifest`,
-      "--mount", `type=bind,source=${mountPath(npmCache)},target=/cache`,
-      "--workdir", "/manifest", image, "npm", "ci", "--cache", "/cache", "--ignore-scripts",
-    ], { streamOutput: true });
+    for (const offline of [false, true]) {
+      // A fresh directory ensures validation cannot reuse the online installation.
+      const manifests = path.join(scratch, offline ? "offline" : "online");
+      await mkdir(manifests);
+      await copyFile(path.join(projectDir, "package.json"), path.join(manifests, "package.json"));
+      await copyFile(path.join(projectDir, "package-lock.json"), path.join(manifests, "package-lock.json"));
+      const phase = offline ? "Offline npm cache validation" : "Online npm dependency collection";
+      console.log(`[dockpack] ${phase}${offline ? " (network disabled)" : ""}...`);
+      try {
+        docker.run([
+          "run", "--rm", "--pull", "never", "--platform", platform,
+          ...(offline ? ["--network", "none"] : []),
+          "--mount", `type=bind,source=${mountPath(manifests)},target=/manifest`,
+          "--mount", `type=bind,source=${mountPath(npmCache)},target=/cache${offline ? ",readonly" : ""}`,
+          "--workdir", "/manifest", image, "node", "-e", checkedNpmInstall, "--",
+          "--cache", "/cache", "--ignore-scripts", "--logs-max=0",
+          ...(offline ? ["--offline"] : []),
+        ], { streamOutput: true });
+      } catch (error) {
+        throw new DockpackError(
+          `${phase} failed. No new development bundle was created. ` +
+          "Check the npm errors above and registry access on the connected machine, then run 'dockpack pack dev' again.",
+          { cause: error },
+        );
+      }
+    }
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
