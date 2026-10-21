@@ -52,8 +52,10 @@ function mountPath(hostPath: string): string {
 // with status 0. Require an actual npm ci completion summary as well as status.
 const checkedNpmInstall = String.raw`
 const { spawnSync } = require("node:child_process");
+const { readdirSync, readFileSync } = require("node:fs");
+const logDir = "/tmp/dockpack-npm-logs";
 const result = spawnSync("npm", ["ci", "--json", "--no-audit", "--no-fund",
-  "--update-notifier=false", ...process.argv.slice(1)], {
+  "--update-notifier=false", "--logs-dir=" + logDir, ...process.argv.slice(1)], {
   encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
 });
 if (result.stdout) process.stdout.write(result.stdout);
@@ -64,6 +66,20 @@ try {
   completed = Number.isInteger(summary.added) && summary.added >= 0 && !summary.error;
 } catch {}
 if (result.error || result.status !== 0 || !completed || /^npm\s+(?:error|ERR!)(?:\s|$)/m.test(result.stderr || "")) {
+  // npm sometimes hides the network failure behind its own exit-handler error.
+  // Logs live outside the cache so this also works with a read-only offline cache.
+  try {
+    const logs = readdirSync(logDir).filter(name => name.endsWith("-debug-0.log")).sort();
+    const log = logs[logs.length - 1];
+    if (log) {
+      const failures = readFileSync(logDir + "/" + log, "utf8").split(/\r?\n/)
+        .filter(line => /http fetch .*failed|\b(?:ECONNRESET|ENOTFOUND|ETIMEDOUT|ENOTCACHED|EAI_AGAIN|EINTEGRITY)\b/.test(line));
+      if (failures.length) {
+        console.error("dockpack: npm download/cache failure details:");
+        for (const line of failures.slice(-20)) console.error(line);
+      }
+    }
+  } catch {}
   console.error("dockpack: npm ci did not complete successfully; refusing to use an incomplete dependency cache.");
   if (result.error) console.error(result.error.message);
   process.exit(1);
@@ -108,7 +124,7 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
           "--mount", `type=bind,source=${mountPath(manifests)},target=/manifest`,
           "--mount", `type=bind,source=${mountPath(npmCache)},target=/cache${offline ? ",readonly" : ""}`,
           "--workdir", "/manifest", image, "node", "-e", checkedNpmInstall, "--",
-          "--cache", "/cache", "--ignore-scripts", "--logs-max=0",
+          "--cache", "/cache", "--ignore-scripts",
           ...(offline ? ["--offline"] : []),
         ], { streamOutput: true });
       } catch (error) {
