@@ -71,9 +71,10 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
   };
   const configPath = path.join(root, ".dockpack.yaml");
   let created: boolean;
+  let config = rawConfig as DockpackConfig;
   try {
     created = await createConfigOnce(root, rawConfig as DockpackConfig);
-    if (!created) await readConfig(configPath);
+    if (!created) config = await readConfig(configPath);
   } catch (error) {
     if (error instanceof DockpackError) throw error;
     throw new DockpackError(`Project initialization failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -81,7 +82,7 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
   return {
     configPath,
     created,
-    config: rawConfig as DockpackConfig,
+    config,
     findings: [...detections.flatMap((item) => item.findings), ...compose.findings],
     services: compose.services.map((service) => service.name),
   };

@@ -24,6 +24,10 @@ program.command("init")
     console.log(`${result.created ? "Created" : "Found existing configuration; preserved it"}: ${result.configPath}`);
     console.log(`Project: ${result.config.project.name} (${result.config.project.ecosystems.join(", ") || "not detected"})`);
     console.log(`Compose services: ${result.services.join(", ") || "none detected"}`);
+    console.log(`开发目标平台：${result.config.target.dev_platform}${result.config.target.dev_platform === "auto" ? "（打包时跟随 Docker daemon；交付其他架构时请先修改）" : ""}`);
+    console.log(`开发启动命令：${result.config.application.dev_command.length ? JSON.stringify(result.config.application.dev_command) : "未设置，dev start 将尝试推断"}`);
+    console.log(`开发映射端口：${result.config.application.dev_port ?? "未显式设置"}（须与程序实际监听端口一致）`);
+    console.log("请检查 .dockpack.yaml 中的中文注释；完整配置说明：https://github.com/phobal/dockpack/blob/main/docs/configuration.md");
     if (result.findings.length) {
       console.log("Review findings:");
       for (const finding of result.findings) console.log(`  - ${finding}`);

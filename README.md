@@ -188,6 +188,10 @@ dockpack deploy restore <archive> --backup <archive> [--overwrite]
 
 ## 项目发现与配置
 
+首次使用请先阅读 [`.dockpack.yaml` 配置指南](./docs/configuration.md)：包含最小前端示例、全部字段的类型与默认值、Python/Compose 示例，以及修改配置后的生效步骤。`dockpack init` 新生成的配置会带中文注释；已有文件会保留，不会自动补写注释。
+
+普通前端开发通常先确认 `project.ecosystems`、`target.dev_platform`、`application.dev_command` 和 `application.dev_port`。其中 `dev_platform` 应按离线服务器选择；`auto` 跟随联网打包机器的 Docker daemon。
+
 在 `.dockpack.yaml` 中分别设置开发包和生产包的容器目标平台：
 
 ```yaml
