@@ -1,6 +1,6 @@
 {
   "name": "dockpack-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Prepare Docker based development and deployment bundles for offline environments",
   "author": "phobal <fphobal@gmail.com>",
   "license": "MIT",
