@@ -30,13 +30,19 @@ target:
 
 ```sh
 # 联网机器
-dockpack pack dev ./my-frontend -o ./offline-dev.tar.gz
-dockpack pack inspect ./offline-dev.tar.gz
+cd ./my-frontend
+dockpack pack dev
+dockpack pack inspect ./.dockpack/offline-dev-linux-amd64.tar.gz
 
-# 离线机器：先将上述文件复制到对应位置
-dockpack dev init ./my-frontend --bundle ./offline-dev.tar.gz
-dockpack dev start ./my-frontend
+# 离线机器：先传输源码、配置、锁文件及 .dockpack/ 下的包
+cd ./my-frontend
+dockpack dev init
+dockpack dev start
 ```
+
+上例的 `dev_platform` 为 `linux/amd64`。默认开发包路径为 `<项目>/.dockpack/offline-dev-<平台>.tar.gz`，平台中的 `/` 换成 `-`；`auto` 使用执行命令时 Docker daemon 的实际平台。项目目录默认取当前工作目录，`dev init` 按相同规则查找包。跨架构交付时请显式设置目标平台，避免在联网和离线机器上解析出不同的默认文件名。
+
+原有全参数形式仍可使用，例如 `dockpack pack dev ./my-frontend -o ./custom-dev.tar.gz` 和 `dockpack dev init ./my-frontend --bundle ./custom-dev.tar.gz`。显式 `-o` / `--bundle` 路径相对于命令执行目录解析；默认路径则位于指定项目内部。旧包或自定义名称的包可以继续通过 `--bundle` 导入。
 
 ## 配置规则
 

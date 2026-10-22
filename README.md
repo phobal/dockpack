@@ -102,18 +102,32 @@ CLI 版本和项目包的 `dockpack_version` 都取自 `package.json`。项目�
 在有网络、包含项目源代码且 Docker 可用的机器上执行：
 
 ```sh
-dockpack init ./my-project
-# 按需检查并修改 my-project/.dockpack.yaml
-dockpack pack dev ./my-project --output ./my-project-dev.tar.gz
+cd ./my-project
+dockpack init
+# 按需检查并修改 .dockpack.yaml，尤其是 target.dev_platform
+dockpack pack dev
+# 例如 dev_platform: linux/amd64，输出为 .dockpack/offline-dev-linux-amd64.tar.gz
 ```
 
-将开发包和项目源代码分别传到离线机器，然后执行：
+将项目源码、配置、锁文件和 `.dockpack/` 下的开发包一起传到离线机器，然后在项目目录中执行：
 
 ```sh
-dockpack init ./my-project            # 仅在项目中没有 .dockpack.yaml 时执行
-dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
+cd ./my-project
+dockpack dev init
+dockpack dev start
+```
+
+这些命令的项目目录默认是当前命令执行目录，不向父目录自动查找项目。`pack dev` 默认输出到项目的 `.dockpack/offline-dev-<平台>.tar.gz`，将平台中的 `/` 换成 `-`；`dev init` 按相同规则查找开发包。`dev_platform: auto` 时使用当前 Docker daemon 的实际平台生成或查找文件名。默认包不存在时会提示完整路径，不会自动选择其他架构的包。
+
+仍可指定项目目录、输出位置或导入包，显式路径相对于命令执行目录解析：
+
+```sh
+dockpack pack dev ./my-project -o ./custom-dev.tar.gz
+dockpack dev init ./my-project --bundle ./custom-dev.tar.gz
 dockpack dev start ./my-project
 ```
+
+单独指定项目目录、未指定 `-o` 时，输出仍写入该项目的 `.dockpack/`，例如 `dockpack pack dev ./my-project`。
 
 `dev init` 会校验归档和依赖输入文件，将包内 Docker 镜像导入本机 Docker 后台服务，把开发包缓存存到 `$XDG_CACHE_HOME/dockpack/bundles/`（未设置时使用 `~/.cache/dockpack/bundles/`），并创建本地依赖卷。该命令不会启动应用服务。项目中的依赖文件必须与打包时一致；dockpack 会校验文件哈希，文件变化后需要重新生成开发包。
 
@@ -170,10 +184,10 @@ dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.ta
 
 ```bash
 dockpack init [project-directory]
-dockpack pack dev [project-directory] --output <archive>
+dockpack pack dev [project-directory] [-o, --output <archive>]
 dockpack pack inspect <archive>
 dockpack import <archive>
-dockpack dev init [project-directory] --bundle <archive>
+dockpack dev init [project-directory] [--bundle <archive>]
 dockpack dev start|stop|rebuild [project-directory]
 dockpack dev exec [project-directory] -- <command...>
 dockpack build prod [project-directory] --output <archive>

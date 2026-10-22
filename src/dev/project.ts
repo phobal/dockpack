@@ -12,6 +12,7 @@ import { runCompose, runComposeAttached, getComposeCommand } from "../compose/co
 import { analyzeCompose } from "../compose/inspect.js";
 import { sha256Files } from "./dependencies.js";
 import { detectProject, inferDevelopmentServer } from "../project/detect.js";
+import { defaultDevelopmentBundlePath } from "./bundle-path.js";
 
 interface ProjectState {
   schema_version: 1;
@@ -172,9 +173,24 @@ async function verifyDependencyInputs(root: string, state: ProjectState): Promis
 
 function exists(file: string): boolean { return existsSync(file); }
 
-export async function initializeDevProject(projectDir: string, bundlePath: string): Promise<void> {
+export async function initializeDevProject(projectDir: string, suppliedBundle?: string): Promise<void> {
   const root = path.resolve(projectDir);
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
+  const docker = new DockerRunner();
+  let bundlePath = suppliedBundle;
+  if (bundlePath === undefined) {
+    let platform: string = config.target.dev_platform;
+    if (platform === "auto") {
+      if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required to resolve target.dev_platform=auto. Start Docker before initializing the project.");
+      platform = docker.platform().id;
+    }
+    bundlePath = defaultDevelopmentBundlePath(root, platform);
+    if (!existsSync(bundlePath)) {
+      throw new DockpackError(`Default development bundle not found: ${bundlePath}. Copy the matching development bundle to this path or specify --bundle <path>.`);
+    }
+  }
+  console.log(`[dockpack] Initializing development project: ${root}`);
+  console.log(`[dockpack] Development bundle: ${path.resolve(bundlePath)}`);
   const temp = await mkdtemp(path.join(os.tmpdir(), "dockpack-import-"));
   try {
     const bundleRoot = await extractArchive(bundlePath, temp);
@@ -187,7 +203,6 @@ export async function initializeDevProject(projectDir: string, bundlePath: strin
     }
     const missingEcosystems = config.project.ecosystems.filter((ecosystem) => !manifest.dependencies[ecosystem]);
     if (missingEcosystems.length) throw new DockpackError(`Bundle is missing dependencies for: ${missingEcosystems.join(", ")}`);
-    const docker = new DockerRunner();
     if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required to initialize the project.");
     if (docker.platform().id !== manifest.target_platform) throw new DockpackError(`Bundle targets ${manifest.target_platform}; Docker daemon uses ${docker.platform().id}.`);
     const cacheRoot = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "dockpack", "bundles", await bundleFingerprint(bundlePath));

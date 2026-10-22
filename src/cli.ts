@@ -37,11 +37,11 @@ program.command("init")
 const pack = program.command("pack").description("Create and inspect offline bundles");
 pack.command("dev")
   .description("Create an offline development bundle on a connected machine")
-  .argument("[project-directory]", "project root", ".")
-  .requiredOption("-o, --output <path>", "output archive path")
-  .action(async (projectDirectory: string, options: { output: string }) => {
-    await createDevelopmentBundle(projectDirectory, options.output);
-    console.log(`Created development bundle: ${options.output}`);
+  .argument("[project-directory]", "project root (defaults to the current working directory)", ".")
+  .option("-o, --output <path>", "output archive path (default: <project>/.dockpack/offline-dev-<platform>.tar.gz)")
+  .action(async (projectDirectory: string, options: { output?: string }) => {
+    const output = await createDevelopmentBundle(projectDirectory, options.output);
+    console.log(`Created development bundle: ${output}`);
     console.log(offlineRuntimeHint());
   });
 pack.command("inspect")
@@ -68,13 +68,13 @@ program.command("import")
 const dev = program.command("dev").description("Manage an offline development environment");
 dev.command("init")
   .description("Attach an offline bundle to the original project directory")
-  .argument("[project-directory]", "project root", ".")
-  .requiredOption("--bundle <path>", "development bundle")
-  .action(async (projectDirectory: string, options: { bundle: string }) => {
+  .argument("[project-directory]", "project root (defaults to the current working directory)", ".")
+  .option("--bundle <path>", "development bundle (default: <project>/.dockpack/offline-dev-<platform>.tar.gz)")
+  .action(async (projectDirectory: string, options: { bundle?: string }) => {
     await initializeDevProject(projectDirectory, options.bundle);
     console.log(`Initialized development environment in ${projectDirectory}`);
   });
-dev.command("start").argument("[project-directory]", "project root", ".").action(startDev);
+dev.command("start").argument("[project-directory]", "project root (defaults to the current working directory)", ".").action(startDev);
 dev.command("stop").argument("[project-directory]", "project root", ".").action(stopDev);
 dev.command("rebuild").argument("[project-directory]", "project root", ".").action(rebuildDev);
 dev.command("exec")

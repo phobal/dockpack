@@ -86,7 +86,7 @@ export async function extractArchive(bundlePath: string, destination?: string): 
     throw error;
   }
   if (bundleStat.isDirectory()) {
-    throw new DockpackError(`Bundle path is a directory: ${bundlePath}. Expected a Dockpack .tar.gz archive created with 'dockpack pack dev --output <archive.tar.gz>'.`);
+    throw new DockpackError(`Bundle path is a directory: ${bundlePath}. Expected a Dockpack .tar.gz archive created with 'dockpack pack dev'.`);
   }
   if (!bundleStat.isFile()) throw new DockpackError(`Bundle path is not a regular archive file: ${bundlePath}`);
   const temporary = destination ? path.resolve(destination) : await mkdtemp(path.join(os.tmpdir(), "dockpack-verify-"));

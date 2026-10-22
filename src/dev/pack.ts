@@ -13,6 +13,7 @@ import { DockerRunner } from "../docker/runner.js";
 import { detectProject } from "../project/detect.js";
 import { stringify, YAMLSeq } from "yaml";
 import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
+import { defaultDevelopmentBundlePath } from "./bundle-path.js";
 
 function elapsed(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1000);
@@ -48,7 +49,7 @@ async function dockerfileBaseImages(filename: string): Promise<string[]> {
   return [...result];
 }
 
-export async function createDevelopmentBundle(projectDir: string, outputPath: string): Promise<void> {
+export async function createDevelopmentBundle(projectDir: string, outputPath?: string): Promise<string> {
   const root = path.resolve(projectDir);
   const totalStarted = Date.now();
   const docker = new DockerRunner();
@@ -71,6 +72,8 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
     const compose = await analyzeCompose(root, config.compose.files, config.compose.profiles);
     return { config, platform, detections, compose };
   });
+  const output = outputPath ?? defaultDevelopmentBundlePath(root, platform);
+  console.log(`[dockpack] Development bundle output: ${path.resolve(output)}`);
   const stage = await mkdtemp(path.join(os.tmpdir(), "dockpack-dev-stage-"));
   try {
     const cacheDir = path.join(stage, "cache");
@@ -201,8 +204,9 @@ export async function createDevelopmentBundle(projectDir: string, outputPath: st
       services: infrastructure.map((service) => service.name),
       findings,
     });
-    await progress(`Writing bundle archive ${path.resolve(outputPath)}`, () => createArchive(stage, outputPath, manifest));
+    await progress(`Writing bundle archive ${path.resolve(output)}`, () => createArchive(stage, output, manifest));
     console.log(`[dockpack] Development bundle completed in ${elapsed(Date.now() - totalStarted)}.`);
+    return path.resolve(output);
   } finally {
     await rm(stage, { recursive: true, force: true });
   }
