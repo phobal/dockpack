@@ -3,6 +3,7 @@ import { z } from "zod";
 export const composeConfigSchema = z.object({
   files: z.array(z.string()).default([]),
   profiles: z.array(z.string()).default([]),
+  dev_networks: z.array(z.string().min(1)).default([]),
   include_services: z.array(z.string()).default([]),
   exclude_services: z.array(z.string()).default([]),
 }).strict().superRefine((value, context) => {

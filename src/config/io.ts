@@ -25,6 +25,7 @@ const CONFIG_COMMENTS: Record<string, string> = {
   compose: "没有 Compose 时保留空列表；服务名必须与 Compose 文件一致。",
   "compose.files": "相对于项目根目录的 Compose 文件，按顺序合并；空列表表示不加载 Compose，不会重新自动发现。",
   "compose.profiles": "启用的 Compose profiles，需要 Docker Compose v2。",
+  "compose.dev_networks": "开发容器加入的 Compose 网络配置键；从配套服务检测生成，可手动调整。空列表使用默认网络，不要填写 Docker 实际网络名。",
   "compose.include_services": "dev start/stop 纳入的配套服务，例如 [db, redis]；不是打包白名单，不要填原应用服务。",
   "compose.exclude_services": "开发/生产打包排除的服务；与 include_services 不可重叠。",
   dependencies: "依赖检测记录。当前不能通过以下文件列表自定义依赖收集路径。",

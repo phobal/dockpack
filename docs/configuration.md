@@ -24,7 +24,7 @@ target:
 2. `target.dev_platform`：填写离线服务器的 Docker 容器平台。x64 Linux 为 `linux/amd64`，ARM64 Linux 为 `linux/arm64`。Apple Silicon Mac 向 x64 服务器交付时也应填 `linux/amd64`。
 3. `application.dev_command`：程序实际的开发启动命令，按参数拆为数组。
 4. `application.dev_port`：与程序监听端口一致。Web 服务需监听 `0.0.0.0`，否则主机可能无法访问。
-5. 使用数据库等 Compose 服务时，再配置 `compose.files` 和 `compose.include_services`。
+5. 使用数据库等 Compose 服务时，再配置 `compose.files`、`compose.include_services` 和 `compose.dev_networks`。
 
 在联网机器修改并打包，将配置、项目源码、锁文件和离线包一起传给目标机器：
 
@@ -94,10 +94,15 @@ CLI 离线运行包中的 `darwin-arm64`、`linux-x64` 等名称表示 CLI 主�
 | --- | --- | --- | --- |
 | `compose.files` | 字符串数组 | `[]` | 按数组顺序加载、合并的 Compose 文件。`init` 会尝试发现并写入路径；配置中的空列表表示不加载 Compose，不会在后续打包时重新发现文件。 |
 | `compose.profiles` | 字符串数组 | `[]` | 启用的 Compose profiles，需要 Compose v2。 |
+| `compose.dev_networks` | 非空字符串组成的数组 | `[]` | 所有 dockpack 开发容器加入的 Compose 网络配置键，例如 `[57ai-network]`。空列表使用隐式默认网络。`init` 根据配套服务的网络自动生成并去重，可手动删减；不修改生产服务的网络。 |
 | `compose.include_services` | 字符串数组 | `[]` | `dev start/stop` 显式纳入的配套服务。通常填写数据库、缓存等，不填写被开发容器替代的原应用服务。它不是打包白名单，也不控制生产包包含哪些服务。 |
 | `compose.exclude_services` | 字符串数组 | `[]` | 开发与生产打包排除的服务。与 `include_services` 不得重叠；还应同步调整 Compose 中对被排除服务的依赖。 |
 
 开发打包收集除 `application.service` 和排除列表之外的配套服务镜像；生产打包纳入未排除的服务。因此，只填写 `include_services: [db]` 不会自动排除 Compose 中其他服务。
+
+`dev_networks` 支持从服务的网络列表和网络映射两种写法中检测网络键。只有默认网络时生成 `[]`；配套服务分别使用默认网络和自定义网络时，会同时列出 `default` 与自定义网络；多个自定义网络取并集。如没有配套服务，则参考原应用服务。`network_mode: host/none/service:.../container:...` 不会转换为网络名。多个网络之间存在隔离要求时，应在生成后按需删减。
+
+网络键必须来自 `compose.files` 的网络定义；`default` 可使用 Compose 的隐式默认网络。此字段不会自动创建外部网络，`external: true` 的网络仍需提前准备。不要填写 Docker 展示的带项目前缀的实际名称：例如 Compose 定义 `networks: { app-net: { name: shared-net } }` 时，应填写 `app-net`，而不是 `shared-net`。
 
 ### `dependencies`：依赖检测记录与限制
 
@@ -138,17 +143,21 @@ application:
 compose:
   files: [compose.yaml, compose.offline.yaml]
   profiles: []
+  dev_networks: [app-network]
   include_services: [db, redis]
   exclude_services: [adminer]
 ```
 
-保留已有的 `application.dev_command` 等其他字段。上例要求两个 Compose 文件都存在，并已处理对 `adminer` 的服务依赖。dockpack 会生成应用开发容器，配套服务按 Compose 的配置启动。
+保留已有的 `application.dev_command` 等其他字段。上例要求两个 Compose 文件都存在、定义了 `app-network`，且 `db`、`redis` 也加入该网络，并已处理对 `adminer` 的服务依赖。dockpack 会生成应用开发容器，配套服务按 Compose 的配置启动。
+
+后端配置中的连接地址也要使用 Compose 服务名和容器端口，例如 `MYSQL_HOST=db`、`REDIS_HOST=redis`。容器里的 `localhost` 指向自己，仅加入网络不会自动改写 `.env` 或应用配置。对于 57ai 示例，应设置 `dev_networks: [57ai-network]`，并将 `MYSQL_HOST`、`REDIS_HOST`、`MINIO_ENDPOINT` 分别设置为 `mysql`、`redis`、`minio:9000`。
 
 ## 修改后什么时候生效？
 
 | 修改内容 | 后续操作 |
 | --- | --- |
 | 开发命令、开发端口 | 停止开发服务后重新 `dev start`，同时确认程序监听地址和端口。 |
+| `compose.dev_networks` | 使用支持该字段的 CLI，停止开发服务后重新 `dev start`，启动时重新生成的 overlay 会应用网络配置。仅调整已有网络的连接关系不需要重新打包依赖；若引入新服务镜像则需要重新打包。旧配置缺少此字段时默认 `[]`，可手动补充；再次 `init` 不会覆盖已有配置。 |
 | 开发平台、运行时版本、依赖文件 | 联网端重新 `pack dev`，传输新配置、源码和依赖文件，再在离线端 `dev init --bundle ...`。仅修改离线端配置不会转换包内镜像或补全依赖。 |
 | 开发运行时列表、Compose 服务及镜像 | 重新打包并初始化，确保新容器所需的镜像和依赖已随包交付。 |
 | 生产启动命令、生产端口、生产构建配置 | 按该字段的适用场景重新 `build prod`，再传输和部署新的生产包。 |

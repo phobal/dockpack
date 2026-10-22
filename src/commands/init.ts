@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createConfigOnce, readConfig } from "../config/io.js";
 import type { DockpackConfig } from "../config/schema.js";
-import { analyzeCompose } from "../compose/inspect.js";
+import { analyzeCompose, type ComposeService } from "../compose/inspect.js";
 import { detectProject, inferBuildCommand, inferDevelopmentServer, inferStartCommand } from "../project/detect.js";
 import { DockpackError } from "../errors.js";
 
@@ -11,6 +11,21 @@ export interface InitSummary {
   config: DockpackConfig;
   findings: string[];
   services: string[];
+}
+
+function inferDevelopmentNetworks(services: ComposeService[]): string[] {
+  const networks = new Set<string>();
+  for (const service of services) {
+    // Host, none, and service/container network modes cannot be copied as names.
+    if (service.network_mode) continue;
+    const value = service.networks;
+    const names = Array.isArray(value)
+      ? value.filter((name): name is string => typeof name === "string")
+      : value && typeof value === "object" ? Object.keys(value) : [];
+    for (const name of names.length ? names : ["default"]) networks.add(name);
+  }
+  // Keep the ordinary implicit default when no custom networks were found.
+  return networks.size === 1 && networks.has("default") ? [] : [...networks];
 }
 
 export async function initializeProject(projectDir: string): Promise<InitSummary> {
@@ -32,6 +47,8 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
     return identities.some((identity) => identity === serviceName || identity === imageName);
   });
   const applicationService = composeApplication?.name ?? "app";
+  const infrastructure = compose.services.filter((service) => service.name !== applicationService);
+  const devNetworks = inferDevelopmentNetworks(infrastructure.length ? infrastructure : compose.services);
   const command = await inferStartCommand(root, detections);
   const developmentServer = await inferDevelopmentServer(root, detections);
   const buildCommand = await inferBuildCommand(root, detections);
@@ -60,7 +77,8 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
     compose: {
       files: compose.files.map((file) => path.relative(root, file)),
       profiles: [],
-      include_services: compose.services.filter((service) => service.name !== applicationService).map((service) => service.name),
+      dev_networks: devNetworks,
+      include_services: infrastructure.map((service) => service.name),
       exclude_services: [],
     },
     dependencies: {
@@ -83,7 +101,12 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
     configPath,
     created,
     config,
-    findings: [...detections.flatMap((item) => item.findings), ...compose.findings],
+    findings: [
+      ...detections.flatMap((item) => item.findings), ...compose.findings,
+      ...(!created && devNetworks.some((name) => !config.compose.dev_networks.includes(name))
+        ? [`Compose services use networks ${devNetworks.join(", ")}. Existing configuration was preserved; set compose.dev_networks to attach development containers to the required networks.`]
+        : []),
+    ],
     services: compose.services.map((service) => service.name),
   };
 }

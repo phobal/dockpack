@@ -78,6 +78,7 @@ async function writeOverlay(root: string, state: ProjectState, version: string, 
       working_dir: "/workspace",
       command: config.application.dev_command.length > 0 ? config.application.dev_command : ["sleep", "infinity"],
       ...(config.application.dev_port ? { ports: [`${config.application.dev_port}:${config.application.dev_port}`] } : {}),
+      ...(config.compose.dev_networks.length ? { networks: [...new Set(config.compose.dev_networks)] } : {}),
       volumes: [
         { type: "bind", source: "${DOCKPACK_PROJECT_DIR}", target: "/workspace" },
         { type: "volume", source: volumeKey, target: ecosystem === "python" ? "/opt/dockpack/deps" : "/workspace/node_modules" },

@@ -206,6 +206,17 @@ dockpack deploy restore <archive> --backup <archive> [--overwrite]
 
 普通前端开发通常先确认 `project.ecosystems`、`target.dev_platform`、`application.dev_command` 和 `application.dev_port`。其中 `dev_platform` 应按离线服务器选择；`auto` 跟随联网打包机器的 Docker daemon。
 
+使用 Compose 数据库、缓存等配套服务时，可通过 `compose.dev_networks` 指定开发容器加入的网络。`dockpack init` 新建配置时会从配套服务的网络中检测并去重；只有默认网络时保留 `[]`。例如：
+
+```yaml
+compose:
+  files: [docker/docker-compose.yml]
+  dev_networks: [57ai-network]
+  include_services: [mysql, redis, minio]
+```
+
+填写 Compose 顶层 `networks` 中的配置键，不是 Docker 实际创建的网络名。已有配置可手动补充此字段，使用新版 CLI 停止后重新 `dev start` 即可应用。应用连接地址也应使用对应服务名（例如 `MYSQL_HOST=mysql`）；网络配置不会改写 `.env` 中的 `localhost`。完整规则见 [配置指南](./docs/configuration.md#compose现有服务与文件)。
+
 在 `.dockpack.yaml` 中分别设置开发包和生产包的容器目标平台：
 
 ```yaml
