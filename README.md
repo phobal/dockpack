@@ -1,125 +1,208 @@
-# dockpack 命令行工具
+# dockpack
 
-dockpack 用于在可联网的机器上准备基于 Docker 的开发与部署离线包，再将离线包导入无网络环境运行。开发包包含当前支持的 Python 或 Node.js 依赖缓存和运行时镜像；生产包包含部署项目所需的 Linux amd64 镜像和 Compose 配置。
+dockpack 帮你在**有网的电脑上准备依赖和 Docker 镜像**，再带到**无网的机器上开发、构建和部署项目**。
 
-dockpack 负责打包和环境生命周期管理，不负责在机器之间同步项目源代码。请另行将项目代码复制或检出到目标机器。
+第一次使用，按下面的步骤完成一次离线开发环境搭建即可。示例采用「联网电脑 → Linux x64 离线服务器」；其他目标平台的步骤相同，只需选择对应的架构和工具运行包。
 
-项目进展与后续方向请参阅 [Roadmap](./ROADMAP.md)，覆盖前端与 Python 后端的离线开发、离线生产环境，以及 Skills 辅助配置与搭建。
+## 1. 开始前准备什么？
 
-## 环境要求
-
-- 通过 npm 安装或从源码开发命令行工具需要 Node.js 20 或更高版本。离线运行包自带 Node.js，无需预装 Node.js 或 npm。
-- 创建、导入或运行离线包需要 Docker CLI 和正在运行的 Docker 后台服务（daemon）。
-- 使用 Compose 的项目，以及开发和部署生命周期命令，需要 Docker Compose v2（`docker compose`）或旧版 Compose（`docker-compose`）。
-- 生产打包所用的 Docker daemon 必须能够构建 Linux 容器。当前生产包目标平台为 `linux/amd64`。
-
-## 安装与构建
-
-在代码仓库中执行：
-
-```sh
-npm install
-npm run build
-node dist/cli.js --help
-```
-
-将软件发布到 npm 后，可全局安装 `dockpack` 命令：
-
-```sh
-npm install --global dockpack-cli
-dockpack --help
-```
-
-### 无网络、未安装 Node.js 的机器
-
-先在联网机器上取得对应主机平台的离线运行包和旁边的 `.sha256` 校验文件，再与项目离线包一起传入离线环境。运行包需要完整解压，不能只复制启动脚本。项目源码也需要另行传输。
-
-| 离线主机 | 运行包名称 |
+| 位置 | 需要准备 |
 | --- | --- |
-| Linux x64 | `dockpack-cli-<版本>-linux-x64.tar.gz` |
-| Linux ARM64/aarch64 | `dockpack-cli-<版本>-linux-arm64.tar.gz` |
-| Windows x64 | `dockpack-cli-<版本>-win32-x64.zip` |
-| macOS Intel | `dockpack-cli-<版本>-darwin-x64.tar.gz` |
-| macOS Apple Silicon | `dockpack-cli-<版本>-darwin-arm64.tar.gz` |
+| 联网电脑 | 项目源码、Node.js 20 或以上、Docker、Docker Compose v2；能下载项目依赖和 Docker 镜像 |
+| 离线机器 | Docker、Docker Compose v2；安装过程见所在环境的 Docker 部署要求 |
 
-这些是同一版本的五个发行附件，npm 包仍只发布一次。选择的是运行 dockpack 的主机平台，不是 Docker 容器平台。例如在 Apple Silicon Mac 上操作 Linux 容器，应选择 `darwin-arm64`。
+两边的 Docker 都需要启动，执行命令的账号需要有 Docker 使用权限。离线机器无需预装 Node.js 或 Python：dockpack 工具运行包自带 Node.js，项目运行时由 Docker 镜像提供。**Docker 和 Compose 本身需要提前安装，dockpack 不会安装它们。**
 
-Linux ARM64 运行包适用于 ARM64/aarch64 主机。项目生产包当前以 `linux/amd64` 为目标，部署时要求 Docker daemon 的平台与项目包匹配；ARM64 生产镜像尚未支持。
+目前支持的项目依赖：
 
-Linux/macOS 示例（将版本和平台替换为实际值）：
+- **Node.js 项目**：项目根目录有 `package.json` 和 `package-lock.json`，使用 npm。
+- **Python 项目**：项目根目录有 `requirements.txt`；缺少时使用 `requirements-dev.txt`，不会自动合并两者，使用 pip。
 
-```sh
-# macOS 使用 shasum；Linux 也可以使用 sha256sum -c
-shasum -a 256 -c dockpack-cli-0.1.0-darwin-arm64.tar.gz.sha256
-tar -xzf dockpack-cli-0.1.0-darwin-arm64.tar.gz
-./dockpack-cli-0.1.0-darwin-arm64/dockpack --version
-./dockpack-cli-0.1.0-darwin-arm64/dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
-```
+项目还需能识别运行时版本，例如 Node.js 使用 `.nvmrc` 或 `package.json` 的 `engines.node`，Python 使用 `.python-version`（如 `3.11`）。目前不支持通过修改配置启用 pnpm、Yarn、Poetry 或 uv。
 
-Windows PowerShell 示例：
-
-```powershell
-Get-FileHash .\dockpack-cli-0.1.0-win32-x64.zip -Algorithm SHA256
-# 将输出与同名 .zip.sha256 文件内的值核对后解压
-Expand-Archive .\dockpack-cli-0.1.0-win32-x64.zip -DestinationPath .\tools
-.\tools\dockpack-cli-0.1.0-win32-x64\dockpack.cmd --version
-.\tools\dockpack-cli-0.1.0-win32-x64\dockpack.cmd dev init .\my-project --bundle .\my-project-dev.tar.gz
-```
-
-运行包内有启动器、`runtime/` 下的 Node.js、`app/` 下的 CLI、许可证、平台元数据 `runtime.json` 和文件校验清单。可以将解压后的运行包根目录加入 PATH，之后直接使用 `dockpack`。启动器会调用内置 Node.js，不访问 npm，也不会自动下载依赖。Docker CLI、daemon 和 Compose 仍需预先准备。
-
-当前内置 Node.js 24.22.0，其[系统要求](https://github.com/nodejs/node/blob/v24.22.0/BUILDING.md#platform-list)为：Linux x64/arm64 内核 >= 4.18、glibc >= 2.28；Windows x64 >= Windows 10/Server 2016；macOS >= 13.5。Linux 使用官方 glibc 构建，不适用于 Alpine/musl。macOS 包目前没有额外的应用签名/公证，需按企业的可执行文件分发策略部署。生产卷备份和恢复仍只支持本地 Linux Docker 主机。
-
-### 构建离线运行包（维护者）
+## 2. 在联网电脑上安装 dockpack
 
 ```sh
-npm ci
-npm run build:offline
-# 或只生成一个平台
-npm run build:offline -- --target darwin-arm64
-# Linux ARM64
-npm run build:offline -- --target linux-arm64
-# 指定输出目录
-npm run build:offline -- --target linux-x64 --output ./release
+npm install -g dockpack-cli
+dockpack --version
 ```
 
-此命令在联网机器上将 CLI 及其 npm 生产依赖打包为单文件，并下载已固定版本的官方 Node.js 归档。Node.js 版本、下载来源和五个平台的 SHA-256 固定在 `scripts/offline-runtime.json`；每次使用缓存也会校验哈希。更新运行时需同步更新版本、文件名和校验值，官方校验文件位于 `https://nodejs.org/dist/v<版本>/SHASUMS256.txt`。
-
-产物默认写入 `release/`，每个平台生成一个压缩包和一个 `.sha256` 文件。下载缓存位于 `.offline-cache/`，临时构建目录为 `.offline-build/`，这些目录不进入 Git 或 npm 发布包。运行包包含 dockpack、Node.js 和已捆绑第三方依赖的许可证文本。
-
-仓库的 **Build offline runtime packages** GitHub Actions 工作流支持手动执行或通过 `v<版本>` 标签触发，在五种原生主机上构建、核对校验和并检查启动器。标签必须与 `package.json` 中的版本一致，例如版本 `0.3.0` 对应标签 `v0.3.0`。
-
-通过标签运行时，五个平台全部成功后，工作流会自动创建或复用该标签对应的 GitHub Release，将五个压缩包及五个 `.sha256` 文件上传到 **Assets**，用户可以直接从仓库 Releases 页面下载。重新运行时会替换同名附件；带预发布版本号的标签（例如 `v0.4.0-beta.1`）会创建为预发布版本。发布任务使用内置 `GITHUB_TOKEN` 的 `contents: write` 权限，无需另配个人令牌。
-
-从分支手动运行时只保存 Actions Artifacts；从标签手动运行时也会上传 Release Assets。工作流不自动发布 npm 包。
-
-CLI 版本和项目包的 `dockpack_version` 都取自 `package.json`。项目归档按 `schema_version` 判断兼容性，支持的旧格式无需与 CLI 版本号完全相等；遇到不支持的格式时，CLI 会提示转运兼容的离线运行包。
-
-## 常见工作流程
-
-### 准备和使用离线开发环境
-
-在有网络、包含项目源代码且 Docker 可用的机器上执行：
+检查 Docker 和 Compose 是否可用：
 
 ```sh
-cd ./my-project
+docker version
+docker compose version
+```
+
+这两个命令应能正常返回版本信息，其中 `docker version` 需要包含服务端信息。
+
+## 3. 在联网电脑上配置项目
+
+进入**你的项目根目录**，不是 dockpack 工具的目录：
+
+```sh
+cd my-project
 dockpack init
-# 按需检查并修改 .dockpack.yaml，尤其是 target.dev_platform
-dockpack pack dev
-# 例如 dev_platform: linux/amd64，输出为 .dockpack/offline-dev-linux-amd64.tar.gz
 ```
 
-将项目源码、配置、锁文件和 `.dockpack/` 下的开发包一起传到离线机器，然后在项目目录中执行：
+命令会生成 `.dockpack.yaml`，其中带有中文注释。已有文件会保留，不会覆盖你的修改。
+
+### 先确认离线机器的架构
+
+打开 `.dockpack.yaml`，修改对应字段，保留其余配置：
+
+```yaml
+target:
+  dev_platform: linux/amd64
+  production_platform: linux/amd64
+```
+
+- 离线机器是 **x64 Linux**：`dev_platform` 填 `linux/amd64`。
+- 离线机器是 **ARM64 Linux**：填 `linux/arm64`。
+- `auto` 使用联网电脑 Docker 的架构；跨机器交付时建议明确填写目标平台。
+
+例如联网电脑是 Apple Silicon Mac，离线服务器是 x64 Linux，这里仍填 `linux/amd64`。联网电脑的 Docker 需要支持运行目标架构容器。
+
+### 再确认开发启动命令和端口
+
+例如 Vite 前端项目：
+
+```yaml
+application:
+  dev_command: [npm, run, dev, --, --host, 0.0.0.0, --port, "5173"]
+  dev_port: 5173
+```
+
+将示例替换为项目实际使用的命令和端口。服务需要监听 `0.0.0.0`，端口映射才能访问。
+
+如果项目是 Python 后端，或依赖 MySQL、Redis、MinIO 等服务，请先查看[配置指南中的场景示例](./docs/configuration.md#常见场景)。重点确认：
+
+- `compose.files` 指向项目实际的 Compose 文件。
+- `compose.include_services` 包含开发时需要启动的配套服务。
+- `compose.dev_networks` 与这些服务使用同一个 Compose 网络；新建配置时会自动检测。
+- 后端在容器内通过服务名连接配套服务，例如 `mysql`、`redis`，不能继续使用表示容器自身的 `localhost`。希望本地和离线共用 `.env` 时，可参考[环境变量覆盖示例](./docs/configuration.md#本地与-dockpack-共用一份-env)。
+
+所有字段的作用、默认值及限制见[完整配置指南](./docs/configuration.md)。
+
+## 4. 在联网电脑上打包
+
+仍在项目根目录执行：
 
 ```sh
-cd ./my-project
+dockpack pack dev
+```
+
+dockpack 会准备目标平台的运行时镜像、项目依赖缓存和 Compose 配套服务镜像。命令成功后，开发包默认保存在：
+
+```text
+my-project/.dockpack/offline-dev-linux-amd64.tar.gz
+```
+
+ARM64 对应文件名为 `offline-dev-linux-arm64.tar.gz`。可以查看包里的目标平台：
+
+```sh
+dockpack pack inspect .dockpack/offline-dev-linux-amd64.tar.gz
+```
+
+确认输出的 `Target` 与离线机器一致。**如果打包报错，先解决错误再继续，不要使用此前留下的旧包。**
+
+## 5. 准备离线工具，并传输文件
+
+在联网电脑打开 [GitHub Releases](https://github.com/phobal/dockpack/releases)，从 **Assets** 下载适用于离线机器的 CLI 运行包和同名 `.sha256` 文件。
+
+Linux x64 选择 `dockpack-cli-<版本>-linux-x64.tar.gz`。注意下载的是 **dockpack CLI 运行包**，不是 GitHub 自动提供的 Source code；其他系统的选包方式见[离线工具安装说明](./docs/offline-runtime.md)。
+
+需要带走的文件分为两部分：
+
+1. **项目目录**：源码、`.dockpack.yaml`、依赖文件及锁文件、Compose 文件，以及 `.dockpack/` 下刚生成的开发包。项目运行需要的本地配置也要在目标机器准备好。
+2. **dockpack CLI 运行包及其校验文件**：供离线机器直接执行工具，无需访问 npm。
+
+建议在离线机器上按下面的结构存放。以下工具版本以 `0.5.0` 为例，请替换为实际下载的版本：
+
+```text
+offline-delivery/
+├── dockpack-cli-0.5.0-linux-x64.tar.gz
+└── my-project/
+    ├── .dockpack.yaml
+    ├── 项目源码、依赖文件、锁文件及 Compose 文件
+    └── .dockpack/
+        └── offline-dev-linux-amd64.tar.gz
+```
+
+复制时要包含以 `.` 开头的隐藏文件和目录。dockpack 不会自动传输源码，开发包也不包含项目源码或数据库数据。**不要把联网电脑的 `.dockpack/state.json` 当作离线端初始化结果**，在目标机器重新执行下一步的 `dev init`。
+
+## 6. 在离线机器上安装工具并初始化项目
+
+### 解压工具
+
+进入上面的交付目录：
+
+```sh
+cd offline-delivery
+sha256sum -c dockpack-cli-0.5.0-linux-x64.tar.gz.sha256
+tar -xzf dockpack-cli-0.5.0-linux-x64.tar.gz
+export PATH="$PWD/dockpack-cli-0.5.0-linux-x64:$PATH"
+dockpack --version
+```
+
+`export PATH` 只对当前终端生效。新开终端后重新设置，或将解压目录加入账号的 PATH。工具目录中的 `runtime/` 和 `app/` 要完整保留，不能只复制 `dockpack` 启动文件。
+
+### 初始化开发环境
+
+```sh
+cd my-project
 dockpack dev init
+```
+
+该命令默认从项目的 `.dockpack/` 中查找目标平台的开发包，校验后导入镜像、安装依赖、创建本机开发状态。它**不会启动应用**。
+
+不要在离线端执行 `npm install -g dockpack-cli` 或重新运行 `pack dev`。工具和项目依赖已经在联网阶段准备，离线端使用带过来的包。
+
+## 7. 在离线机器上启动并开发
+
+仍在项目根目录执行：
+
+```sh
 dockpack dev start
 ```
 
-这些命令的项目目录默认是当前命令执行目录，不向父目录自动查找项目。`pack dev` 默认输出到项目的 `.dockpack/offline-dev-<平台>.tar.gz`，将平台中的 `/` 换成 `-`；`dev init` 按相同规则查找开发包。`dev_platform: auto` 时使用当前 Docker daemon 的实际平台生成或查找文件名。默认包不存在时会提示完整路径，不会自动选择其他架构的包。
+应用和选定的配套服务会启动，当前终端显示日志。按前面 Vite 示例配置时，可在浏览器访问 `http://<离线机器地址>:5173`；在服务器本机访问则用 `http://localhost:5173`。远程访问还需允许相应端口通过服务器防火墙。
 
-仍可指定项目目录、输出位置或导入包，显式路径相对于命令执行目录解析：
+项目源码挂载到开发容器中，修改源码后由项目自己的开发服务处理热更新。按 `Ctrl+C` 停止本次启动的开发容器，依赖卷和配套服务数据卷会保留。
+
+在另一个已配置好 dockpack PATH 的终端中，也可以执行：
+
+```sh
+cd my-project
+dockpack dev exec . -- npm run lint  # Node.js 项目示例，需项目有 lint 脚本
+dockpack dev stop                  # 停止开发服务
+dockpack dev rebuild               # 使用已有离线缓存重新安装依赖
+```
+
+## 8. 后续更新怎么做？
+
+| 变化 | 操作 |
+| --- | --- |
+| 只修改源码 | 直接开发，是否热更新取决于项目自己的开发服务 |
+| 修改开发启动命令、端口或开发网络 | 修改配置，停止后重新 `dockpack dev start` |
+| 新增或升级依赖、修改运行时版本或目标平台、加入新的配套镜像 | 回到联网电脑重新打包，将新配置、依赖文件、源码和开发包传入离线环境，再执行 `dockpack dev init` |
+
+离线端不能凭空下载新依赖，`dev rebuild` 只使用已经导入的缓存。配置或锁文件变化后，旧开发包不会自动更新。
+
+## 常见问题
+
+| 现象 | 先检查什么 |
+| --- | --- |
+| 提示找不到默认开发包 | 包是否在项目的 `.dockpack/` 中，文件名与 `dev_platform` 是否匹配；自定义路径使用 `--bundle` |
+| 提示包是 ARM64，但服务器需要 AMD64 | 在联网电脑设置正确的 `dev_platform` 后重新打包，传输新包；只修改离线端配置不够 |
+| npm 报 `ENOTCACHED` | 缓存不完整或依赖文件与打包时不同；联网端确认收集成功后重新打包 |
+| npm 报 `Exit handler never called!` | 查看下载失败详情，确认容器能访问锁文件里固定的 registry 地址 |
+| Python 后端连接 `localhost` 的 MySQL 失败 | 容器内改用数据库服务名，并确认开发容器与数据库在同一网络 |
+| 服务启动了但浏览器打不开 | 检查监听地址是否为 `0.0.0.0`、实际端口与 `dev_port` 是否一致，以及主机端口访问规则 |
+
+## 其他用法
+
+所有项目目录参数均可省略，默认使用当前命令执行目录。原有全参数形式仍然支持：
 
 ```sh
 dockpack pack dev ./my-project -o ./custom-dev.tar.gz
@@ -127,125 +210,8 @@ dockpack dev init ./my-project --bundle ./custom-dev.tar.gz
 dockpack dev start ./my-project
 ```
 
-单独指定项目目录、未指定 `-o` 时，输出仍写入该项目的 `.dockpack/`，例如 `dockpack pack dev ./my-project`。
-
-`dev init` 会校验归档和依赖输入文件，将包内 Docker 镜像导入本机 Docker 后台服务，把开发包缓存存到 `$XDG_CACHE_HOME/dockpack/bundles/`（未设置时使用 `~/.cache/dockpack/bundles/`），并创建本地依赖卷。该命令不会启动应用服务。项目中的依赖文件必须与打包时一致；dockpack 会校验文件哈希，文件变化后需要重新生成开发包。
-
-`dev start` 会在前台运行配置的 Compose 服务和 dockpack 开发运行容器。按 `Ctrl+C` 会停止并移除本次启动的容器；命名依赖卷和其他服务容器会保留。对于 `dev` 脚本中调用 Vite 的 Node.js 项目，dockpack 会推断启动命令、将服务绑定到 `0.0.0.0`、映射端口（默认 `5173`），并显示本地访问地址。其他项目需要在 `.dockpack.yaml` 中配置 `application.dev_command`，并可选填 `application.dev_port`：
-
-```yaml
-application:
-  dev_command: [npm, run, dev, --, --host, 0.0.0.0]
-  dev_port: 5173
-```
-
-其他开发命令：
-
-```sh
-dockpack dev exec ./my-project -- npm run lint
-dockpack dev stop ./my-project
-dockpack dev rebuild ./my-project
-```
-
-`dev exec` 在第一个已配置的 Python 或 Node.js 开发容器中执行命令；该容器必须正在运行。`dev stop` 停止已配置的开发服务和纳入运行的 Compose 服务。`dev rebuild` 使用导入的离线缓存创建新的依赖卷并安装依赖，不会启动服务。
-
-### 构建和运行离线生产部署包
-
-先在将要构建生产包的机器上导入并初始化开发包，使收集到的依赖缓存和基础镜像可供离线构建使用。然后生成生产归档：
-
-```sh
-dockpack dev init ./my-project --bundle ./my-project-dev.tar.gz
-dockpack build prod ./my-project --output ./my-project-prod.tar.gz
-```
-
-将生产归档传到目标 Linux amd64 Docker 主机后执行部署：
-
-```sh
-dockpack deploy import ./my-project-prod.tar.gz
-dockpack deploy up ./my-project-prod.tar.gz
-dockpack deploy status ./my-project-prod.tar.gz
-dockpack deploy logs ./my-project-prod.tar.gz [service]
-dockpack deploy down ./my-project-prod.tar.gz
-```
-
-部署文件存放在 `$XDG_DATA_HOME/dockpack/deployments/`（未设置时使用 `~/.local/share/dockpack/deployments/`）。需要的镜像尚未导入时，`deploy up` 会从包中导入镜像，然后启动 Compose；此过程不会构建或拉取镜像。如果包声明了生产环境变量，请在部署目录的 `.env` 文件或启动命令的进程环境中提供这些变量。需要配置的变量会写入包内的 `.env.example`。
-
-对于 Compose 项目，生产打包会解析配置的 Compose 文件，纳入未排除的服务并打包其镜像。带有 `build` 配置的服务会在禁用网络的情况下构建为 `linux/amd64` 镜像。没有 `build` 配置的服务所引用的镜像必须已存在于本机，且平台匹配；生产构建过程不会拉取这些镜像。`pack dev` 也会尝试缓存项目根目录 `Dockerfile` 中引用的 `linux/amd64` 基础镜像，供使用该 Dockerfile 的生产构建流程使用。其他构建基础镜像和镜像引用需要预先以所需平台准备好。如果项目没有 Compose 配置，dockpack 会生成单应用镜像和 Compose 文件；此方式要求项目只检测到一种运行时、依赖输入受支持，并且显式配置 `application.command`。
-
-`deploy backup` 会归档内部命名卷，并在备份期间短暂停止再重启服务。`deploy restore` 将备份恢复到同一项目；目标卷非空时必须添加 `--overwrite`。备份和恢复要求本机 Docker 主机运行 Linux。`deploy down` 会保留命名卷。
-
-```sh
-dockpack deploy backup ./my-project-prod.tar.gz --output ./my-project-backup.tar.gz
-dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.tar.gz
-dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.tar.gz --overwrite
-```
-
-## 命令一览
-
-```bash
-dockpack init [project-directory]
-dockpack pack dev [project-directory] [-o, --output <archive>]
-dockpack pack inspect <archive>
-dockpack import <archive>
-dockpack dev init [project-directory] [--bundle <archive>]
-dockpack dev start|stop|rebuild [project-directory]
-dockpack dev exec [project-directory] -- <command...>
-dockpack build prod [project-directory] --output <archive>
-dockpack prod inspect <archive>
-dockpack deploy import|up|down|status <archive>
-dockpack deploy logs <archive> [service]
-dockpack deploy backup <archive> [--output <archive>]
-dockpack deploy restore <archive> --backup <archive> [--overwrite]
-```
-
-`pack inspect` 和 `prod inspect` 会校验归档路径及校验和，然后输出包的元数据。`dockpack import` 是通用的镜像导入命令；开发环境应使用 `dev init`，它还会安装依赖并写入项目状态。生产部署命令则会管理部署目录和 Compose 服务。
-
-## 项目发现与配置
-
-首次使用请先阅读 [`.dockpack.yaml` 配置指南](./docs/configuration.md)：包含最小前端示例、全部字段的类型与默认值、Python/Compose 示例，以及修改配置后的生效步骤。`dockpack init` 新生成的配置会带中文注释；已有文件会保留，不会自动补写注释。
-
-普通前端开发通常先确认 `project.ecosystems`、`target.dev_platform`、`application.dev_command` 和 `application.dev_port`。其中 `dev_platform` 应按离线服务器选择；`auto` 跟随联网打包机器的 Docker daemon。
-
-使用 Compose 数据库、缓存等配套服务时，可通过 `compose.dev_networks` 指定开发容器加入的网络。`dockpack init` 新建配置时会从配套服务的网络中检测并去重；只有默认网络时保留 `[]`。例如：
-
-```yaml
-compose:
-  files: [docker/docker-compose.yml]
-  dev_networks: [57ai-network]
-  include_services: [mysql, redis, minio]
-```
-
-填写 Compose 顶层 `networks` 中的配置键，不是 Docker 实际创建的网络名。已有配置可手动补充此字段，使用新版 CLI 停止后重新 `dev start` 即可应用。应用连接地址也应使用对应服务名（例如 `MYSQL_HOST=mysql`）；网络配置不会改写 `.env` 中的 `localhost`。完整规则见 [配置指南](./docs/configuration.md#compose现有服务与文件)。
-
-在 `.dockpack.yaml` 中分别设置开发包和生产包的容器目标平台：
-
-```yaml
-target:
-  dev_platform: linux/arm64
-  production_platform: linux/amd64
-```
-
-`target.dev_platform` 支持 `linux/amd64`、`linux/arm64` 和 `auto`。默认值为 `auto`，打包时使用当前 Docker daemon 的平台；旧配置没有该字段时也按 `auto` 处理。`dockpack init` 新生成的配置会显式写入 `dev_platform: auto`。
-
-`pack dev` 使用选定的平台拉取运行时与基础服务镜像、运行 Python/npm 依赖收集容器、构建 Compose 服务，并将该平台写入开发包清单。跨架构打包要求联网机器的 Docker 能执行目标架构容器（例如已配置相应的模拟执行支持）。离线端 `dev init` 会核对显式配置、包清单与 Docker daemon 的平台，生成的开发 Compose 配置也会使用包内目标平台。变更开发平台后，需要在联网环境重新打包，并在离线机器重新执行 `dev init --bundle ...`。
-
-如果 Compose 服务已配置 `build.platforms`，dockpack 会将该列表替换为开发目标平台，避免构建其他架构。这种情况需要 [Docker Compose 2.24.4 或更新版本](https://docs.docker.com/reference/compose-file/merge/#replace-value)；旧版本需升级 Compose 或移除该服务的 `build.platforms` 配置。
-
-开发平台与生产平台不同、且根目录 Dockerfile 的生产基础镜像复用了开发镜像标签时，打包会保留开发架构的镜像并输出警告；对应生产基础镜像需要在离线生产构建前另行准备，避免同一标签被其他架构覆盖。`production_platform` 当前仍只支持 `linux/amd64`。这里的 `linux/arm64` 是容器平台名称；CLI 离线运行包中的 `linux-arm64` 则表示运行 dockpack 的主机平台。
-
-`dockpack init` 会分析项目，并且只在 `.dockpack.yaml` 不存在时创建配置文件。它会报告检测到的 Python/Node.js 运行时、Compose 服务和需要关注的问题；如果配置文件已存在，则会保留原文件。Compose 发现逻辑会检查项目根目录中的标准文件名，也会向下检查最多四层目录，寻找唯一且明确的嵌套项目。如果发现多个嵌套项目，请在 `compose.files` 中指定配置文件。
-
-初始化时，dockpack 可从 `.nvmrc`、`.node-version`、`.tool-versions`、`package.json` 的 `engines.node` 字段，以及常见脚本中的显式 `NODE_VERSION` 赋值读取 Node.js 版本提示。它还会尝试从项目元数据推断应用启动和构建命令，并为 Vite 推断开发命令。打包前请检查生成的配置，尤其是 `application.service`、`application.command`、`application.build_command`、Compose 服务选择和依赖文件列表。
-
-当前版本支持收集以下离线依赖：
-
-- Python：通过 pip 收集 `requirements.txt` 或 `requirements-dev.txt`。
-- Node.js：通过 npm 收集 `package.json` 和 `package-lock.json` 对应的依赖。
-
-`init` 可能会检测到其他 Python 或 Node.js 包管理器，但当前版本尚不支持用它们创建离线包。Python 项目需要可检测到 Python 主版本和次版本；Node.js 项目需要可检测到 Node.js 版本。`pack dev` 会显示各阶段的进度和耗时，并实时输出较长时间运行的 Docker 和包管理器命令日志。
-
-## 离线包和路径处理
-
-离线包是带有清单和 SHA-256 校验和的 gzip 压缩 tar 归档。导入和检查归档时，dockpack 会先校验归档内容。开发状态保存在项目的 `.dockpack/` 目录下；生成的 `.dockpack/compose.dev.yaml` 使用 `${DOCKPACK_PROJECT_DIR}` 挂载项目源代码，dockpack 在调用 Compose 时会设置此变量。安装依赖期间，临时文件 `.dockpack/compose.install.yaml` 会挂载本机缓存，安装结束后即删除。生成的 overlay 和状态文件不会保存项目目录或缓存目录的绝对路径。
-
-生产 Compose 配置中指向项目内部的绑定挂载（bind mount）会改写为相对于部署目录 `runtime/` 的路径。该目录初始为空，因此主机上的文件和挂载数据不会被复制进离线包。外部卷、外部网络、密钥配置（secrets）、主机网络和设备映射可能需要在目标主机单独配置；请检查打包时的警告和生产包内的说明文档。
+- [配置指南：字段、默认值与场景示例](./docs/configuration.md)
+- [离线工具：其他平台安装、系统要求与维护者构建](./docs/offline-runtime.md)
+- [生产部署：离线构建、部署、备份与恢复](./docs/production.md)
+- [命令参考与文件存储位置](./docs/commands.md)
+- [Roadmap：各方向进展](./ROADMAP.md)

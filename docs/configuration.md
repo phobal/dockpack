@@ -86,7 +86,9 @@ dockpack dev start
 
 跨架构打包要求联网机器的 Docker 能运行目标架构容器。离线端会检查配置、开发包和 Docker daemon 的平台是否匹配。
 
-CLI 离线运行包中的 `darwin-arm64`、`linux-x64` 等名称表示 CLI 主机平台，与这里的容器平台分别选择。开发与生产平台不同、且使用同一镜像标签时，还需处理生产基础镜像冲突，详见 [README 的平台说明](../README.md#项目发现与配置)。
+CLI 离线运行包中的 `darwin-arm64`、`linux-x64` 等名称表示 CLI 主机平台，与这里的容器平台分别选择，详见[运行包选择说明](./offline-runtime.md#选择运行包)。开发与生产平台不同、且使用同一镜像标签时，打包保留开发平台镜像并输出提示，生产平台基础镜像需另行准备，详见[生产构建准备](./production.md#1-在联网环境准备构建资源)。
+
+如果 Compose 服务配置了 `build.platforms`，开发打包会使用 `!override` 将其替换为开发目标平台；这种情况需要 Docker Compose 2.24.4 或以上。旧版需升级或移除该列表。
 
 ### `compose`：现有服务与文件
 
@@ -151,6 +153,40 @@ compose:
 保留已有的 `application.dev_command` 等其他字段。上例要求两个 Compose 文件都存在、定义了 `app-network`，且 `db`、`redis` 也加入该网络，并已处理对 `adminer` 的服务依赖。dockpack 会生成应用开发容器，配套服务按 Compose 的配置启动。
 
 后端配置中的连接地址也要使用 Compose 服务名和容器端口，例如 `MYSQL_HOST=db`、`REDIS_HOST=redis`。容器里的 `localhost` 指向自己，仅加入网络不会自动改写 `.env` 或应用配置。对于 57ai 示例，应设置 `dev_networks: [57ai-network]`，并将 `MYSQL_HOST`、`REDIS_HOST`、`MINIO_ENDPOINT` 分别设置为 `mysql`、`redis`、`minio:9000`。
+
+### 本地与 dockpack 共用一份 `.env`
+
+如果应用像本项目的 Python 示例一样使用 Pydantic Settings，进程环境变量优先于 `.env`。可保留供本地直接启动使用的 `.env`：
+
+```dotenv
+MYSQL_HOST=localhost
+REDIS_HOST=localhost
+MINIO_ENDPOINT=localhost:9000
+```
+
+再在 `.dockpack.yaml` 的开发命令中为容器进程覆盖连接地址。以下服务名和网络名以 57ai 项目为例：
+
+```yaml
+application:
+  dev_command:
+    - env
+    - MYSQL_HOST=mysql
+    - REDIS_HOST=redis
+    - MINIO_ENDPOINT=minio:9000
+    - uvicorn
+    - app.main:app
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --reload
+  dev_port: 8000
+compose:
+  # 保留原有 files、include_services 等配置
+  dev_networks: [57ai-network]
+```
+
+本地直接启动时读取 `.env` 的 `localhost`，dockpack 启动的应用进程则读取上述覆盖值，无需来回改 `.env`。该方式要求镜像有 `env` 命令，且应用没有反过来强制以文件值覆盖环境变量。它只作用于此启动命令及其子进程，不会给独立的 `dev exec` 命令自动注入这些值。当前没有独立的 `dev_environment` 配置字段。
 
 ## 修改后什么时候生效？
 
