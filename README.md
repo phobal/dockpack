@@ -87,7 +87,11 @@ npm run build:offline -- --target linux-x64 --output ./release
 
 产物默认写入 `release/`，每个平台生成一个压缩包和一个 `.sha256` 文件。下载缓存位于 `.offline-cache/`，临时构建目录为 `.offline-build/`，这些目录不进入 Git 或 npm 发布包。运行包包含 dockpack、Node.js 和已捆绑第三方依赖的许可证文本。
 
-仓库的 **Build offline runtime packages** GitHub Actions 工作流支持手动执行或通过 `v<版本>` 标签触发，在五种原生主机上构建、核对校验和并检查启动器。完成后，从 Actions 产物中取得五套文件，作为同一个 GitHub Release 的附件或放到企业内部下载站；工作流不会自动发布 npm 包或创建 Release。
+仓库的 **Build offline runtime packages** GitHub Actions 工作流支持手动执行或通过 `v<版本>` 标签触发，在五种原生主机上构建、核对校验和并检查启动器。标签必须与 `package.json` 中的版本一致，例如版本 `0.3.0` 对应标签 `v0.3.0`。
+
+通过标签运行时，五个平台全部成功后，工作流会自动创建或复用该标签对应的 GitHub Release，将五个压缩包及五个 `.sha256` 文件上传到 **Assets**，用户可以直接从仓库 Releases 页面下载。重新运行时会替换同名附件；带预发布版本号的标签（例如 `v0.4.0-beta.1`）会创建为预发布版本。发布任务使用内置 `GITHUB_TOKEN` 的 `contents: write` 权限，无需另配个人令牌。
+
+从分支手动运行时只保存 Actions Artifacts；从标签手动运行时也会上传 Release Assets。工作流不自动发布 npm 包。
 
 CLI 版本和项目包的 `dockpack_version` 都取自 `package.json`。项目归档按 `schema_version` 判断兼容性，支持的旧格式无需与 CLI 版本号完全相等；遇到不支持的格式时，CLI 会提示转运兼容的离线运行包。
 

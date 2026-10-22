@@ -84,3 +84,46 @@ jobs:
           name: dockpack-${{ matrix.target }}
           path: release/*
           if-no-files-found: error
+
+  release:
+    name: Publish offline runtime assets
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dockpack-*
+          merge-multiple: true
+          path: release
+      - name: Publish packages and checksums to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          assets=()
+          for target in linux-x64 linux-arm64 win32-x64 darwin-x64 darwin-arm64; do
+            extension=tar.gz
+            if [[ "$target" == win32-x64 ]]; then extension=zip; fi
+            file="dockpack-cli-$version-$target.$extension"
+            test -s "release/$file"
+            test -s "release/$file.sha256"
+            (cd release && sha256sum -c "$file.sha256")
+            assets+=("release/$file" "release/$file.sha256")
+          done
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            options=(--verify-tag --title "$GITHUB_REF_NAME" --generate-notes)
+            if [[ "$version" == *-* ]]; then options+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${options[@]}"
+          fi
