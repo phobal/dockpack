@@ -86,10 +86,13 @@ dev.command("exec")
   .action(execDev);
 
 const build = program.command("build").description("Build offline deployment bundles");
-build.command("prod").argument("[project-directory]", "project root", ".").requiredOption("-o, --output <path>")
-  .action(async (projectDirectory: string, options: { output: string }) => {
-    await buildProductionBundle(projectDirectory, options.output);
-    console.log(`Created production bundle: ${options.output}`);
+build.command("prod")
+  .argument("[project-directory]", "project root (defaults to the current working directory)", ".")
+  .option("-o, --output <path>", "output archive path (default: <project>/.dockpack/offline-prod-<platform>.tar.gz)")
+  .option("--bundle <path>", "development resource bundle (default: <project>/.dockpack/offline-dev-<platform>.tar.gz)")
+  .action(async (projectDirectory: string, options: { output?: string; bundle?: string }) => {
+    const output = await buildProductionBundle(projectDirectory, options.output, options.bundle);
+    console.log(`Created production bundle: ${output}`);
     console.log(offlineRuntimeHint());
   });
 

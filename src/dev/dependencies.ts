@@ -50,7 +50,7 @@ function mountPath(hostPath: string): string {
 
 // Some npm versions report fatal errors (including "Exit handler never called!")
 // with status 0. Require an actual npm ci completion summary as well as status.
-const checkedNpmInstall = String.raw`
+export const checkedNpmInstall = String.raw`
 const { spawnSync } = require("node:child_process");
 const { readdirSync, readFileSync } = require("node:fs");
 const logDir = "/tmp/dockpack-npm-logs";

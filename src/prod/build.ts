@@ -1,17 +1,24 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stringify } from "yaml";
-import { bundleCachePath, createArchive } from "../bundles/archive.js";
+import { createArchive } from "../bundles/archive.js";
 import { makeManifest } from "../bundles/manifest.js";
 import { getComposeCommand, runCompose } from "../compose/command.js";
-import { analyzeCompose, resolveComposeModel } from "../compose/inspect.js";
+import { analyzeCompose, resolveComposeModel, type ComposeModel } from "../compose/inspect.js";
 import { readConfig } from "../config/io.js";
 import { DockerRunner } from "../docker/runner.js";
 import { DockpackError } from "../errors.js";
 import { detectProject } from "../project/detect.js";
+import { exportProductionImages } from "./images.js";
+import { checkedNpmInstall, runtimeImage } from "../dev/dependencies.js";
+import { detectStaticFrontend, STATIC_FRONTEND_IMAGE, type StaticFrontend } from "../project/frontend.js";
+import { defaultDevelopmentBundlePath } from "../dev/bundle-path.js";
+import { defaultProductionBundlePath, prepareProductionResources } from "./resources.js";
+import { createFrontendWorkspace } from "./frontend-workspace.js";
+import { productionStep } from "./progress.js";
 
 const TARGET = "linux/amd64";
 
@@ -46,7 +53,7 @@ function dockerfileFor(ecosystem: string, baseImage: string, requirementsFile: s
   return lines.join("\n");
 }
 
-async function prepareContext(root: string, context: string): Promise<void> {
+async function prepareContext(root: string, context: string, frontendMode?: string): Promise<void> {
   const excluded = new Set([".git", ".dockpack", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "coverage"]);
   await cp(root, context, {
     recursive: true,
@@ -57,12 +64,78 @@ async function prepareContext(root: string, context: string): Promise<void> {
       const parts = relative.split(path.sep);
       if (parts.some((part) => excluded.has(part))) return false;
       const name = path.basename(source);
-      if (/^\.env(?:\..*)?$/.test(name) && name !== ".env.example") return false;
+      if (/^\.env(?:\..*)?$/.test(name) && name !== ".env.example") {
+        if (frontendMode === undefined || relative !== name || (name !== ".env" && name !== `.env.${frontendMode}`)) return false;
+      }
       if ([".npmrc", ".pypirc", ".netrc"].includes(name)) return false;
       if (/\.(pem|key|p12|pfx)$/i.test(name)) return false;
       return true;
     },
   });
+}
+
+const prepareStaticBuild = String.raw`
+import { resolveConfig } from "vite";
+import { rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+const inline = JSON.parse(process.argv[1]);
+const config = await resolveConfig(inline, "build", inline.mode);
+if (config.build.ssr || config.build.lib || config.build.watch) {
+  throw new Error("Automatic Nginx packaging supports Vite static sites only; configure a Dockerfile for SSR, library, or watch builds.");
+}
+const output = path.relative("/workspace", path.resolve(config.root, config.build.outDir));
+if (!output || path.isAbsolute(output) || output.split(path.sep).some(part => part === "..") || output.split(path.sep)[0] === "node_modules") {
+  throw new Error("Vite build.outDir must be a subdirectory of the project for automatic offline packaging.");
+}
+await rm(path.resolve("/workspace", output), { recursive: true, force: true });
+await writeFile("/workspace/.dockpack-static-build.json", JSON.stringify({ output, base: config.base }));
+`;
+
+async function buildStaticFrontend(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, nodeImage: string, frontend: StaticFrontend): Promise<void> {
+  if (!docker.hasImage(STATIC_FRONTEND_IMAGE) || docker.imagePlatform(STATIC_FRONTEND_IMAGE) !== TARGET) {
+    throw new DockpackError(`Static frontend production builds need ${STATIC_FRONTEND_IMAGE} for ${TARGET}. Recreate the development bundle with the updated CLI on a connected machine, transfer it, and run 'dockpack build prod' again.`);
+  }
+  const context = await mkdtemp(path.join(stage, "frontend-build-"));
+  const workspace = path.join(context, "workspace");
+  let dockerWorkspace: Awaited<ReturnType<typeof createFrontendWorkspace>> | undefined;
+  try {
+    await productionStep("Copying frontend sources", () => prepareContext(root, workspace, frontend.mode));
+    dockerWorkspace = await createFrontendWorkspace(root, workspace, cacheDir, nodeImage, docker);
+    const active = dockerWorkspace;
+    await productionStep("Resolving Vite production configuration", () => active.run(["node", "--input-type=module", "-e", prepareStaticBuild, "--", JSON.stringify(frontend.vite)]));
+    await productionStep(`Building static frontend: ${frontend.command.join(" ")} (network disabled)`, () => active.run(frontend.command));
+    const metadata = active.metadata();
+    const relative = path.posix.relative("/workspace", path.posix.resolve("/workspace", metadata.output));
+    if (!relative || relative.split("/").includes("..") || path.posix.isAbsolute(relative)) {
+      throw new DockpackError("The frontend build output must be inside its Docker workspace.");
+    }
+    const base = metadata.base === "./" || metadata.base === "" ? "/" : metadata.base;
+    if (!/^\/(?:[A-Za-z0-9._~-]+\/)*$/.test(base) || base.split("/").some((part) => part === "." || part === "..")) {
+      throw new DockpackError("Automatic Nginx packaging requires a local Vite base path such as '/' or '/app/'; use a custom Dockerfile for other base URLs.");
+    }
+    const runtime = path.join(context, "runtime");
+    const site = path.join(runtime, "site", ...base.split("/").filter(Boolean));
+    await mkdir(site, { recursive: true });
+    await productionStep("Exporting static frontend assets", () => active.copyOutput(relative, site));
+    const locations = [
+      ...(base === "/" ? [] : ["    location / { return 404; }", `    location = ${base.slice(0, -1)} { return 302 ${base}; }`]),
+      `    location ${base} { try_files $uri $uri/ ${base}index.html; }`,
+      "    location ~* \\.(?:js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|wasm)$ { try_files $uri =404; }",
+    ];
+    await writeFile(path.join(runtime, "default.conf"), [
+      "server {", "    listen 80;", "    server_name _;", "    root /usr/share/nginx/html;", "    index index.html;", ...locations, "}", "",
+    ].join("\n"), "utf8");
+    await writeFile(path.join(runtime, "Dockerfile"), [
+      `FROM ${STATIC_FRONTEND_IMAGE}`,
+      'COPY ["site/", "/usr/share/nginx/html/"]',
+      'COPY ["default.conf", "/etc/nginx/conf.d/default.conf"]',
+      "EXPOSE 80", "",
+    ].join("\n"), "utf8");
+    await productionStep("Building Nginx production image", () => docker.run(["buildx", "build", "--pull=false", "--network=none", "--platform", TARGET, "--load", "--tag", image, runtime], { streamOutput: true }));
+  } finally {
+    try { dockerWorkspace?.cleanup(); }
+    finally { await rm(context, { recursive: true, force: true }); }
+  }
 }
 
 function lockFile(detection: { ecosystem: string; lockFiles: string[]; dependencyFiles: string[] }): string {
@@ -75,34 +148,45 @@ function lockFile(detection: { ecosystem: string; lockFiles: string[]; dependenc
   return "package-lock.json";
 }
 
-async function buildGeneratedApplication(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, config: Awaited<ReturnType<typeof readConfig>>): Promise<void> {
+async function buildGeneratedApplication(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, config: Awaited<ReturnType<typeof readConfig>>): Promise<boolean> {
   if (docker.platform().os !== "linux") throw new DockpackError("Production image creation requires a Docker daemon capable of building Linux containers.");
   const detections = await detectProject(root);
   if (detections.length !== 1) throw new DockpackError("Automatic production Dockerfile generation currently supports one application runtime per project.");
   const detection = detections[0]!;
   const file = lockFile(detection);
   const command = config.application.command;
-  if (command.length === 0) throw new DockpackError("Set application.command in .dockpack.yaml; Dockpack could not safely infer how to start this project.");
+  const frontend = detection.ecosystem === "node" ? await detectStaticFrontend(root, command, config.application.build_command) : undefined;
+  if (!frontend && command.length === 0) throw new DockpackError("Set application.command in .dockpack.yaml; Dockpack could not safely infer how to start this project.");
   const runtime = (await import("../dev/dependencies.js")).runtimeImage(detection, root);
   const baseImage = await runtime;
   if (!docker.hasImage(baseImage)) throw new DockpackError(`Required base image ${baseImage} is not present locally. Prepare it in the development bundle before going offline.`);
+  if (frontend) {
+    await buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend);
+    return true;
+  }
   const basePlatform = docker.imagePlatform(baseImage);
   if (basePlatform !== TARGET) throw new DockpackError(`Base image ${baseImage} is ${basePlatform}; production build needs ${TARGET}.`);
   const context = path.join(stage, "build-context");
   await mkdir(context, { recursive: true });
-  await prepareContext(root, context);
-  const dockerfile = path.join(context, "Dockerfile.dockpack");
-  let hasBuildScript = false;
-  if (detection.ecosystem === "node") {
-    const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
-    hasBuildScript = Boolean(packageJson.scripts?.build);
+  try {
+    await prepareContext(root, context);
+    const dockerfile = path.join(context, "Dockerfile.dockpack");
+    let hasBuildScript = false;
+    if (detection.ecosystem === "node") {
+      const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+      hasBuildScript = Boolean(packageJson.scripts?.build);
+    }
+    await writeFile(dockerfile, dockerfileFor(detection.ecosystem, baseImage, file, command, hasBuildScript), "utf8");
+    await writeFile(path.join(context, ".dockerignore"), "Dockerfile.dockpack\n", "utf8");
+    await productionStep("Building application production image", () => docker.run([
+      "buildx", "build", "--pull=false", "--platform", TARGET, "--load", "--tag", image,
+      "--file", dockerfile, "--build-context", `dockpack-cache=${cacheDir}`, context,
+    ], { streamOutput: true }));
+  } finally {
+    // Only deployment payload belongs in the archive, never the build workspace.
+    await rm(context, { recursive: true, force: true });
   }
-  await writeFile(dockerfile, dockerfileFor(detection.ecosystem, baseImage, file, command, hasBuildScript), "utf8");
-  await writeFile(path.join(context, ".dockerignore"), "Dockerfile.dockpack\n", "utf8");
-  docker.run([
-    "buildx", "build", "--pull=false", "--platform", TARGET, "--load", "--tag", image,
-    "--file", dockerfile, "--build-context", `dockpack-cache=${cacheDir}`, context,
-  ]);
+  return false;
 }
 
 function composePrefix(files: string[], override?: string): string[] {
@@ -144,16 +228,37 @@ async function validateOfflineBuild(serviceName: string, root: string, buildValu
   }
 }
 
-async function runProjectBuildCommand(root: string, composeFiles: string[], serviceName: string, buildCommand: string[]): Promise<void> {
+async function runProjectBuildCommand(root: string, workspace: string, cacheDir: string, docker: DockerRunner, ecosystem: string, buildCommand: string[]): Promise<void> {
   if (buildCommand.length === 0) throw new DockpackError("Set application.build_command in .dockpack.yaml to build the project before its existing Dockerfile is packaged.");
-  const overlay = path.join(root, ".dockpack", "compose.dev.yaml");
-  if (!existsSync(overlay)) throw new DockpackError("Development overlay is missing; run 'dockpack dev init' first.");
-  const prefix: string[] = [];
-  for (const file of [...composeFiles, overlay]) prefix.push("-f", file);
-  const command = getComposeCommand();
-  if (!command) throw new DockpackError("Docker Compose is required to run application.build_command.");
-  const env = { ...process.env, DOCKPACK_PROJECT_DIR: root };
-  runCompose([...prefix, "run", "--rm", "--no-deps", serviceName, ...buildCommand], root, env);
+  const detection = (await detectProject(root)).find((item) => item.ecosystem === ecosystem);
+  if (!detection) throw new DockpackError(`Cannot detect the ${ecosystem} runtime needed by application.build_command.`);
+  const image = await runtimeImage(detection, root);
+  if (!docker.hasImage(image) || docker.imagePlatform(image) !== TARGET) throw new DockpackError(`The build command needs a local ${TARGET} runtime image: ${image}. Recreate the development bundle.`);
+  const frontend = ecosystem === "node" ? await detectStaticFrontend(root, [], buildCommand) : undefined;
+  await prepareContext(root, workspace, frontend?.mode);
+  if ([workspace, cacheDir].some((value) => value.includes(","))) throw new DockpackError("Docker bind mount paths containing commas are not supported.");
+  const run = (command: string[]) => docker.run([
+    "run", "--rm", "--pull", "never", "--network", "none", "--platform", TARGET,
+    "--mount", `type=bind,source=${workspace},target=/workspace`,
+    "--mount", `type=bind,source=${cacheDir},target=/dockpack-cache,readonly`,
+    "--workdir", "/workspace", image, ...command,
+  ], { streamOutput: true });
+  console.log(`[dockpack] Running application.build_command in an isolated ${TARGET} container (network disabled)...`);
+  if (ecosystem === "node") {
+    await productionStep("Installing application dependencies offline", () => run(["node", "-e", checkedNpmInstall, "--", "--offline", "--cache", "/dockpack-cache/npm", "--include=dev", "--include=optional"]));
+    await productionStep("Running application build command", () => run(buildCommand));
+  } else if (ecosystem === "python") {
+    const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(workspace, name)));
+    if (!requirements) throw new DockpackError("Python production build commands require a requirements file.");
+    await productionStep("Installing Python dependencies and building application offline", () => run(["python", "-c", [
+      "import json, os, subprocess, sys, venv",
+      "venv.create('/tmp/dockpack-build-venv', with_pip=True)",
+      "subprocess.run(['/tmp/dockpack-build-venv/bin/python', '-m', 'pip', 'install', '--no-index', '--find-links=/dockpack-cache/python', '-r', sys.argv[2]], check=True)",
+      "env = dict(os.environ, VIRTUAL_ENV='/tmp/dockpack-build-venv')",
+      "env['PATH'] = '/tmp/dockpack-build-venv/bin:' + env.get('PATH', '')",
+      "subprocess.run(json.loads(sys.argv[1]), env=env, check=True)",
+    ].join("\n"), JSON.stringify(buildCommand), requirements]));
+  } else throw new DockpackError(`Unsupported build command runtime: ${ecosystem}.`);
 }
 
 function makePortableBindMounts(model: { services?: Record<string, Record<string, unknown>> }, projectRoot: string, findings: string[]): void {
@@ -175,29 +280,61 @@ function makePortableBindMounts(model: { services?: Record<string, Record<string
   }
 }
 
-export async function buildProductionBundle(projectDir: string, outputPath: string): Promise<void> {
+function protectProductionEnvironment(model: ComposeModel, requiredConfig: Set<string>, findings: string[]): void {
+  for (const [name, service] of Object.entries(model.services)) {
+    let environment = service.environment;
+    if (Array.isArray(environment)) {
+      environment = Object.fromEntries(environment.map((entry: unknown) => {
+        const text = String(entry);
+        const separator = text.indexOf("=");
+        return separator < 0 ? [text, null] : [text.slice(0, separator), text.slice(separator + 1)];
+      }));
+      service.environment = environment;
+    }
+    if (!environment || typeof environment !== "object") continue;
+    for (const [key, value] of Object.entries(environment)) {
+      if (!/(password|secret|token|api[_-]?key|private[_-]?key)/i.test(key)) continue;
+      // Preserve variable aliases but remove embedded default secret values.
+      const source = typeof value === "string"
+        ? value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(?::[-+?]|[-+?])[\s\S]*)?\}$/)
+          ?? value.match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/)
+        : null;
+      const variable = source?.[1] ?? key;
+      const replacement = `\${${variable}}`;
+      (environment as Record<string, unknown>)[key] = replacement;
+      requiredConfig.add(variable);
+      if (value !== replacement) findings.push(`Sensitive environment value '${key}' for '${name}' was replaced with a production variable.`);
+    }
+  }
+}
+
+export async function buildProductionBundle(projectDir: string, outputPath?: string, developmentBundle?: string): Promise<string> {
+  const totalStarted = Date.now();
   const root = path.resolve(projectDir);
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
   if (config.target.production_platform !== TARGET) throw new DockpackError(`Only ${TARGET} production bundles are supported in this release.`);
   const docker = new DockerRunner();
   if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required to build production bundles.");
-  const stage = await mkdtemp(path.join(os.tmpdir(), "dockpack-prod-stage-"));
+  const daemon = docker.platform();
+  if (daemon.os !== "linux") throw new DockpackError("Production builds require a Docker daemon capable of running Linux containers.");
+  const buildEnvironment = docker.buildEnvironment();
+  console.log(`[dockpack] Production Docker builder: ${buildEnvironment.BUILDX_BUILDER} (docker driver)`);
+  const output = path.resolve(outputPath ?? defaultProductionBundlePath(root, config.target.production_platform));
+  const resourcePlatform = config.target.dev_platform === "auto" ? daemon.id : config.target.dev_platform;
+  const bundlePath = path.resolve(developmentBundle ?? defaultDevelopmentBundlePath(root, resourcePlatform));
+  if (output === bundlePath) throw new DockpackError("Production output must not overwrite the development resource bundle. Choose a different --output path.");
+  const workDir = await mkdtemp(path.join(os.tmpdir(), "dockpack-prod-build-"));
+  const stage = path.join(workDir, "payload");
   try {
-    const stateFile = path.join(root, ".dockpack", "state.json");
-    let bundleRoot: string | undefined;
-    try {
-      const state = JSON.parse(await readFile(stateFile, "utf8")) as { bundle_id?: string; bundle_root?: string };
-      bundleRoot = state.bundle_id ? bundleCachePath(state.bundle_id) : state.bundle_root;
-    } catch {
-      throw new DockpackError("Production building requires an imported development bundle and initialized .dockpack project state.");
-    }
-    if (!bundleRoot) throw new DockpackError("Development bundle cache location is missing from .dockpack/state.json.");
+    await mkdir(stage);
+    const bundleRoot = await prepareProductionResources(root, bundlePath, path.join(workDir, "resources"), docker, TARGET);
+    console.log(`[dockpack] Production target platform: ${TARGET}`);
+    console.log(`[dockpack] Production bundle output: ${output}`);
 
     const composeAnalysis = await analyzeCompose(root, config.compose.files);
     const hasCompose = composeAnalysis.files.length > 0;
     const appService = config.application.service;
     const generatedImage = appImageName(config.project.name, appService);
-    const images = new Set<string>();
     const findings: string[] = [];
     const requiredConfig = new Set<string>();
     const persistentVolumes = new Set<string>();
@@ -207,20 +344,19 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
     const normalizedPath = path.join(composeDir, "compose.yaml");
 
     if (!hasCompose) {
-      await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
-      images.add(generatedImage);
-      const portMap = config.application.port ? [`${config.application.port}:${config.application.port}`] : [];
+      const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
+      const hostPort = config.application.port ?? (staticFrontend ? 80 : null);
+      const portMap = hostPort ? [`${hostPort}:${staticFrontend ? 80 : hostPort}`] : [];
       const composeModel = { services: { [appService]: { image: generatedImage, ports: portMap } } };
+      const images = await productionStep("Exporting production images", () => exportProductionImages(composeModel, docker, stage, TARGET));
       await writeFile(normalizedPath, stringify(composeModel), "utf8");
-      await mkdir(path.join(stage, "images"), { recursive: true });
-      docker.save([...images], path.join(stage, "images", "images.tar"));
       const manifest = makeManifest({
         bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
-        target_platform: TARGET, images: [...images], dependencies: {}, services: [appService],
+        target_platform: TARGET, images, dependencies: {}, services: [appService],
         required_config: [...requiredConfig], persistent_volumes: [], findings,
       });
-      await createArchive(stage, outputPath, manifest);
-      return;
+      await productionStep("Writing production bundle archive", () => createArchive(stage, output, manifest));
+      return output;
     }
 
     const raw = await readFile(composeAnalysis.files[0]!, "utf8");
@@ -248,18 +384,18 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
       if (appUsesExistingDockerfile) {
         const ecosystem = config.project.ecosystems[0];
         if (!ecosystem) throw new DockpackError("No project runtime is configured for application.build_command.");
-        await runProjectBuildCommand(root, composeAnalysis.files, `dockpack-dev-${ecosystem}`, config.application.build_command);
-        await validateOfflineBuild(appService, root, { context: ".", dockerfile: "Dockerfile" });
+        const workspace = path.join(workDir, "application-workspace");
+        await runProjectBuildCommand(root, workspace, path.join(bundleRoot, "cache"), docker, ecosystem, config.application.build_command);
+        await validateOfflineBuild(appService, workspace, { context: ".", dockerfile: "Dockerfile" });
         const image = String(services[appService]?.image || generatedImage);
-        images.add(image);
-        overrideServices[appService] = { image, build: { context: root, dockerfile: "Dockerfile", network: "none" } };
+        overrideServices[appService] = { image, build: { context: workspace, dockerfile: "Dockerfile", network: "none" } };
         if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
       } else {
-        await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
-        images.add(generatedImage);
+        const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
         overrideServices[appService] = { image: generatedImage, build: null };
         if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
-        if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${config.application.port}`];
+        if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${staticFrontend ? 80 : config.application.port}`];
+        else if (staticFrontend && (!Array.isArray(services[appService]?.ports) || services[appService]?.ports.length === 0)) overrideServices[appService].ports = ["80:80"];
       }
     }
 
@@ -284,23 +420,10 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
         const platform = docker.imagePlatform(service.image);
         if (platform !== TARGET) throw new DockpackError(`Image ${service.image} for '${name}' is ${platform}; ${TARGET} is required.`);
       }
-      const image = (overrideServices[name]?.image ?? service.image) as string | undefined;
-      if (image) images.add(image);
       if (service.network_mode === "host") findings.push(`Service '${name}' uses host networking and may not be portable.`);
       if (Array.isArray(service.devices) && service.devices.length) findings.push(`Service '${name}' maps host devices and needs target-specific configuration.`);
       if (Array.isArray(service.secrets) && service.secrets.length) findings.push(`Service '${name}' references secrets; provide secret files on the production host.`);
       if (service.env_file) findings.push(`Service '${name}' uses env_file; create the required production-side file before deployment.`);
-      const environment = service.environment;
-      if (environment && !Array.isArray(environment) && typeof environment === "object") {
-        const entries = environment as Record<string, unknown>;
-        for (const key of Object.keys(entries)) {
-          if (/(password|secret|token|api[_-]?key|private[_-]?key)/i.test(key) && typeof entries[key] === "string" && !String(entries[key]).includes("${")) {
-            entries[key] = `\${${key}}`;
-            requiredConfig.add(key);
-            findings.push(`Sensitive environment value '${key}' for '${name}' was replaced with a production variable.`);
-          }
-        }
-      }
       if (Array.isArray(service.volumes)) {
         for (const volume of service.volumes) {
           if (volume && typeof volume === "object") {
@@ -315,28 +438,15 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
       }
     }
 
+    let deploymentModel = composeModel;
     if (Object.keys(overrideServices).length) {
       await writeFile(overridePath, stringify({ services: overrideServices }), "utf8");
       const buildArgs = composePrefix(composeAnalysis.files, overridePath);
       const servicesToBuild = Object.keys(overrideServices).filter((name) => Boolean(overrideServices[name]?.build)
         && !(name === appService && appNeedsGenerated && !appUsesExistingDockerfile));
-      runCompose([...buildArgs, "build", "--pull=false", ...servicesToBuild], root, docker.buildEnvironment());
+      if (servicesToBuild.length) await productionStep("Building Compose production services", () => runCompose([...buildArgs, "build", "--pull=false", ...servicesToBuild], root, docker.buildEnvironment(), { streamOutput: true }));
       const normalized = await resolveComposeModel(root, [...composeAnalysis.files, overridePath], config.compose.profiles);
-      for (const [name, service] of Object.entries(normalized.services ?? {})) {
-        if (config.compose.exclude_services.includes(name)) {
-          delete normalized.services[name];
-          continue;
-        }
-        delete service.build;
-        delete service.platform;
-        delete service.pull_policy;
-        const image = service.image;
-        if (typeof image === "string") {
-          if (!docker.hasImage(image)) throw new DockpackError(`Image ${image} for '${name}' was not built or loaded.`);
-          if (docker.imagePlatform(image) !== TARGET) throw new DockpackError(`Image ${image} for '${name}' is not ${TARGET}.`);
-          images.add(image);
-        }
-      }
+      deploymentModel = normalized;
       if (normalized.volumes) {
         for (const [name, value] of Object.entries(normalized.volumes)) {
           if ((value as { external?: boolean }).external !== true) persistentVolumes.add(name);
@@ -348,24 +458,21 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
           if ((value as { external?: boolean }).external === true) findings.push(`Network '${name}' is external and must exist on the production host.`);
         }
       }
-      makePortableBindMounts(normalized, root, findings);
-      await writeFile(normalizedPath, stringify(normalized), "utf8");
-    } else {
-      for (const [name, service] of Object.entries(composeModel.services)) {
-        if (config.compose.exclude_services.includes(name)) {
-          delete composeModel.services[name];
-          continue;
-        }
-        delete service.build;
-        delete service.platform;
-        delete service.pull_policy;
-        const image = service.image;
-        if (typeof image === "string" && !config.compose.exclude_services.includes(name)) images.add(image);
-      }
-      makePortableBindMounts(composeModel, root, findings);
-      await writeFile(normalizedPath, stringify(composeModel), "utf8");
     }
     await rm(overridePath, { force: true });
+    for (const [name, service] of Object.entries(deploymentModel.services)) {
+      if (config.compose.exclude_services.includes(name)) {
+        delete deploymentModel.services[name];
+        continue;
+      }
+      delete service.build;
+      delete service.platform;
+    }
+    // Apply protection to the final resolved model, after all build overrides.
+    protectProductionEnvironment(deploymentModel, requiredConfig, findings);
+    makePortableBindMounts(deploymentModel, root, findings);
+    const images = await productionStep("Exporting production images", () => exportProductionImages(deploymentModel, docker, stage, TARGET));
+    await writeFile(normalizedPath, stringify(deploymentModel), "utf8");
 
     for (const finding of findings) console.warn(`dockpack: warning: ${finding}`);
     const example = [...requiredConfig].sort().map((key) => `${key}=`).join("\n");
@@ -383,16 +490,16 @@ export async function buildProductionBundle(projectDir: string, outputPath: stri
       ...findings.map((finding) => `- Review: ${finding}`),
       "",
     ].join("\n"), "utf8");
-    await mkdir(path.join(stage, "images"), { recursive: true });
-    docker.save([...images], path.join(stage, "images", "images.tar"));
     const manifest = makeManifest({
       bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
-      target_platform: TARGET, images: [...images], dependencies: {},
-      services: Object.keys(services).filter((name) => !config.compose.exclude_services.includes(name)),
+      target_platform: TARGET, images, dependencies: {},
+      services: Object.keys(deploymentModel.services),
       findings, required_config: [...requiredConfig], persistent_volumes: [...persistentVolumes],
     });
-    await createArchive(stage, outputPath, manifest);
+    await productionStep("Writing production bundle archive", () => createArchive(stage, output, manifest));
+    return output;
   } finally {
-    await rm(stage, { recursive: true, force: true });
+    await rm(workDir, { recursive: true, force: true });
+    console.log(`[dockpack] Production build elapsed: ${((Date.now() - totalStarted) / 1000).toFixed(1)}s`);
   }
 }

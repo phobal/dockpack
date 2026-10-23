@@ -14,6 +14,8 @@ import { detectProject } from "../project/detect.js";
 import { stringify, YAMLSeq } from "yaml";
 import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
 import { defaultDevelopmentBundlePath } from "./bundle-path.js";
+import { detectStaticFrontend, STATIC_FRONTEND_IMAGE } from "../project/frontend.js";
+import { collectNativeBuildResource } from "./build-resources.js";
 
 function elapsed(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1000);
@@ -172,8 +174,12 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     }
     const findings: string[] = [];
     const developmentImages = new Set(images);
+    const productionBases = new Set(await dockerfileBaseImages(path.join(root, "Dockerfile")));
+    if (await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
+      productionBases.add(STATIC_FRONTEND_IMAGE);
+    }
     // Preserve the development architecture when a production base reuses its tag.
-    for (const baseImage of await dockerfileBaseImages(path.join(root, "Dockerfile"))) {
+    for (const baseImage of productionBases) {
       const productionPlatform = config.target.production_platform;
       if (platform !== productionPlatform && images.has(baseImage)) {
         const finding = `Production base image ${baseImage} (${productionPlatform}) shares a development image tag (${platform}); keeping the development image. Prepare the production base separately before an offline production build.`;
@@ -192,6 +198,10 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     }
     if (images.size > 0) {
       await progress(`Exporting ${images.size} Docker images`, () => docker.save([...images], path.join(imagesDir, "images.tar"), true));
+    }
+    const nodeDetection = detections.find(item => item.ecosystem === "node");
+    if (nodeDetection && await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
+      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker));
     }
 
     const manifest = makeManifest({

@@ -10,6 +10,7 @@ import type { BundleManifest } from "../bundles/manifest.js";
 import { DockerRunner } from "../docker/runner.js";
 import { getComposeCommand, runCompose } from "../compose/command.js";
 import { DockpackError } from "../errors.js";
+import { readProductionImageIds } from "./images.js";
 
 interface Deployment {
   root: string;
@@ -22,7 +23,7 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 36) || "project";
 }
 
-async function loadDeployment(bundlePath: string, importImages: boolean): Promise<Deployment> {
+async function loadDeployment(bundlePath: string, importImages: boolean, activateImages = false): Promise<Deployment> {
   const fingerprint = await bundleFingerprint(bundlePath);
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   const destination = path.join(base, "dockpack", "deployments", fingerprint);
@@ -41,19 +42,25 @@ async function loadDeployment(bundlePath: string, importImages: boolean): Promis
   const docker = new DockerRunner();
   if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required for deployment.");
   if (docker.platform().id !== manifest.target_platform) throw new DockpackError(`Bundle targets ${manifest.target_platform}; Docker daemon uses ${docker.platform().id}.`);
-  for (const name of await readdir(path.join(root, "images"))) {
-    if (name.endsWith(".tar")) {
-      const imagePath = path.join(root, "images", name);
-      const marker = path.join(root, "images", `${name}.loaded`);
-      const needsLoad = importImages || !existsSync(marker) || manifest.images.some((image) => !docker.hasImage(image));
-      if (needsLoad) {
-        docker.load(imagePath);
-        await writeFile(marker, "loaded\n", "utf8");
+  if (importImages || activateImages) {
+    const expectedIds = await readProductionImageIds(root, manifest);
+    const matches = expectedIds && manifest.images.every((image) => docker.hasImage(image) && docker.imageId(image) === expectedIds[image]);
+    // Old bundles lack image IDs; always reload them when activating a version.
+    if (importImages || !matches) {
+      for (const name of await readdir(path.join(root, "images"))) {
+        if (name.endsWith(".tar")) docker.load(path.join(root, "images", name));
+      }
+    }
+    for (const image of manifest.images) {
+      if (!docker.hasImage(image)) throw new DockpackError(`Bundle image import is incomplete: ${image}`);
+      if (expectedIds && docker.imageId(image) !== expectedIds[image]) {
+        throw new DockpackError(`Imported image ${image} does not match the production bundle image ID.`);
+      }
+      if (docker.imagePlatform(image) !== manifest.target_platform) {
+        throw new DockpackError(`Imported image ${image} does not match the production bundle platform.`);
       }
     }
   }
-  const missingImages = manifest.images.filter((image) => !docker.hasImage(image));
-  if (missingImages.length) throw new DockpackError(`Bundle image import is incomplete: ${missingImages.join(", ")}`);
   return { root, composeFile, manifest, projectName: `dockpack-${slug(manifest.project_name)}` };
 }
 
@@ -87,6 +94,16 @@ function composeCall(deployment: Deployment, args: string[]): string {
   return runCompose([...composeArgs(deployment), ...args], deployment.root);
 }
 
+function requireOfflineStartup(): void {
+  if (requireCompose()[0] !== "docker") {
+    throw new DockpackError("Docker Compose v2 ('docker compose') is required to start production services with --pull never. Upgrade legacy docker-compose before deploying or restoring services.");
+  }
+}
+
+function startProduction(deployment: Deployment): void {
+  composeCall(deployment, ["up", "-d", "--no-build", "--pull", "never"]);
+}
+
 async function validateArchivePaths(archivePath: string): Promise<void> {
   const entries: Array<{ path: string; type: string }> = [];
   await tar.list({ file: archivePath, onReadEntry: (entry) => entries.push({ path: entry.path, type: entry.type }) });
@@ -111,12 +128,13 @@ export async function importProductionBundle(bundlePath: string): Promise<void> 
 }
 
 export async function upProduction(bundlePath: string): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, false);
+  requireOfflineStartup();
+  const deployment = await loadDeployment(bundlePath, false, true);
   const missing = missingEnvValues(deployment);
   if (missing.length) {
     throw new DockpackError(`Set required production variables in ${path.join(deployment.root, ".env")} or the process environment: ${missing.join(", ")}`);
   }
-  composeCall(deployment, ["up", "-d", "--no-build"]);
+  startProduction(deployment);
   console.log(`Started ${deployment.manifest.project_name}`);
 }
 
@@ -169,7 +187,8 @@ async function parseVolumes(deployment: Deployment): Promise<Array<{ source: str
 }
 
 export async function backupProduction(bundlePath: string, outputPath?: string): Promise<string> {
-  const deployment = await loadDeployment(bundlePath, false);
+  requireOfflineStartup();
+  const deployment = await loadDeployment(bundlePath, false, true);
   const volumes = await parseVolumes(deployment);
   if (volumes.length === 0) throw new DockpackError("No internal named volumes were found in this production bundle.");
   const output = path.resolve(outputPath ?? `${deployment.manifest.project_name}-backup-${new Date().toISOString().replaceAll(":", "-")}.tar.gz`);
@@ -191,12 +210,13 @@ export async function backupProduction(bundlePath: string, outputPath?: string):
     return output;
   } finally {
     await rm(stage, { recursive: true, force: true });
-    composeCall(deployment, ["up", "-d", "--no-build"]);
+    startProduction(deployment);
   }
 }
 
 export async function restoreProduction(bundlePath: string, backupPath: string, overwrite: boolean): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, false);
+  requireOfflineStartup();
+  const deployment = await loadDeployment(bundlePath, false, true);
   const volumes = await parseVolumes(deployment);
   const stage = await mkdtemp(path.join(os.tmpdir(), "dockpack-restore-"));
   try {
@@ -237,7 +257,7 @@ export async function restoreProduction(bundlePath: string, backupPath: string, 
         }
       }
     } finally {
-      composeCall(deployment, ["up", "-d", "--no-build"]);
+      startProduction(deployment);
     }
   } finally {
     await rm(stage, { recursive: true, force: true });

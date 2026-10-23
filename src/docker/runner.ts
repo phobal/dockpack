@@ -12,6 +12,7 @@ export class DockerRunner {
     const common = {
       timeout: options.timeout,
       cwd: options.cwd,
+      env: args[0] === "buildx" && args[1] === "build" ? this.buildEnvironment() : process.env,
       maxBuffer: 64 * 1024 * 1024,
     };
     const result = options.streamOutput
@@ -21,7 +22,8 @@ export class DockerRunner {
     if (result.status !== 0) {
       const stderr = result.stderr?.toString() ?? "";
       const stdout = result.stdout?.toString() ?? "";
-      throw new DockpackError(`docker ${args.join(" ")} failed: ${(stderr || stdout || "unknown Docker error").trim()}`);
+      const fallback = `exited with status ${result.status ?? "unknown"}${result.signal ? ` (${result.signal})` : ""}; see Docker output above`;
+      throw new DockpackError(`docker ${args.join(" ")} failed: ${(stderr || stdout || fallback).trim()}`);
     }
     return result.stdout?.toString().trim() ?? "";
   }
@@ -32,18 +34,21 @@ export class DockerRunner {
   }
 
   buildEnvironment(): NodeJS.ProcessEnv {
-    const result = spawnSync("docker", ["buildx", "inspect"], { encoding: "utf8", timeout: 10000 });
-    if (result.status === 0 && /\bStatus:\s*inactive\b/i.test(result.stdout)) {
-      const context = spawnSync("docker", ["context", "show"], { encoding: "utf8", timeout: 10000 });
-      const contextName = context.status === 0 ? context.stdout.trim() : "";
-      if (contextName) {
-        const candidate = spawnSync("docker", ["buildx", "inspect", contextName], { encoding: "utf8", timeout: 10000 });
-        if (candidate.status === 0 && /\bStatus:\s*running\b/i.test(candidate.stdout)) {
-          return { ...process.env, BUILDX_BUILDER: contextName };
-        }
-      }
+    // The docker driver shares the daemon's imported images and bundled BuildKit.
+    // A docker-container builder can download BuildKit even with --pull=false.
+    const context = spawnSync("docker", ["context", "show"], { encoding: "utf8", timeout: 10000 });
+    if (context.status !== 0 || !context.stdout.trim()) {
+      throw new DockpackError("Cannot determine the current Docker context for offline image builds. Check 'docker context show' and Docker daemon availability.");
     }
-    return process.env;
+    const contextName = process.env.DOCKER_HOST && !process.env.DOCKER_CONTEXT ? "default" : context.stdout.trim();
+    const env = { ...process.env, BUILDX_BUILDER: contextName };
+    // Inspect without --bootstrap: never start a separate builder or pull its image.
+    const candidate = spawnSync("docker", ["buildx", "inspect", contextName], { encoding: "utf8", timeout: 10000, env });
+    if (candidate.status !== 0 || !/^Driver:\s*docker\s*$/im.test(candidate.stdout) || !/^\s*Status:\s*running\s*$/im.test(candidate.stdout)) {
+      const detail = candidate.error?.message || candidate.stderr?.trim();
+      throw new DockpackError(`Offline image builds require the running Docker driver builder '${contextName}' for the current daemon. Check 'docker buildx inspect ${contextName}' and Docker Buildx availability.${detail ? ` ${detail}` : ""}`);
+    }
+    return env;
   }
 
   platform(): DockerPlatform {
@@ -69,6 +74,10 @@ export class DockerRunner {
 
   imagePlatform(image: string): string {
     return this.run(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image]);
+  }
+
+  imageId(image: string): string {
+    return this.run(["image", "inspect", "--format", "{{.Id}}", image]);
   }
 
   hasImage(image: string): boolean {
