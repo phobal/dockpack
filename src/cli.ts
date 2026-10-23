@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { logger } from "./logger.js";
 import { printBanner } from "./banner.js";
+import { downloadOfflineCli } from "./commands/download.js";
 import chalk, { chalkStderr } from "chalk";
 import { Command } from "commander";
 import { VERSION } from "./version.js";
@@ -42,6 +43,11 @@ program.command("init")
       for (const finding of result.findings) logger.warn(`  - ${finding}`);
     }
   });
+
+program.command("download")
+  .description("Download offline dockpack runtimes to .dockpack (interactive platform selection by default)")
+  .option("-p, --platform <platforms...>", "host platforms, e.g. linux/amd64 linux/arm64 (repeatable; comma-separated values also supported)")
+  .action(async (options: { platform?: string[] }) => downloadOfflineCli(options.platform));
 
 const pack = program.command("pack").description("Create and inspect offline bundles");
 pack.command("dev")

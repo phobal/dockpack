@@ -7,6 +7,7 @@
 | 命令 | 作用 |
 | --- | --- |
 | `dockpack init [project-directory]` | 检测项目，新建带注释的 `.dockpack.yaml`；已有配置保留 |
+| `dockpack download [-p <platforms...>]` | 联网下载当前 CLI 版本的离线运行包到当前目录的 `.dockpack/`，未传平台时交互多选 |
 | `dockpack pack dev [project-directory] [-o <archive>]` | 联网收集镜像与依赖，默认输出到项目 `.dockpack/offline-dev-<平台>.tar.gz` |
 | `dockpack pack inspect <archive>` | 校验离线包并显示类型、平台、镜像等清单信息 |
 | `dockpack dev init [project-directory] [--bundle <archive>]` | 离线导入开发包、安装依赖并初始化本机状态；默认查找项目内对应平台的包 |
@@ -30,6 +31,17 @@ dockpack dev init ./my-project --bundle ./custom-dev.tar.gz
 dockpack dev start ./my-project
 ```
 
+下载离线 CLI 时，选择的是运行 dockpack 的主机平台：
+
+```sh
+dockpack download                                     # 空格多选平台，回车下载
+dockpack download -p linux/amd64                       # 单个平台
+dockpack download -p linux/amd64 linux/arm64            # 多个平台
+dockpack download -p linux/amd64 -p windows/amd64       # 可重复使用 -p
+```
+
+支持 `linux/amd64`、`linux/arm64`、`windows/amd64`、`darwin/amd64`、`darwin/arm64`，也接受发布文件的平台名（如 `linux-x64`、`win32-x64`）和逗号分隔的平台列表。命令从 GitHub Releases 下载与当前 CLI 相同版本的压缩包，并打印保存目录的绝对路径。非交互环境必须通过 `-p` 指定平台。详细安装方法见[CLI 离线运行包](./offline-runtime.md)。
+
 ## 生产环境
 
 | 命令 | 作用 |
@@ -52,6 +64,7 @@ dockpack dev start ./my-project
 | --- | --- |
 | `<项目>/.dockpack.yaml` | 用户编辑的项目配置 |
 | `<项目>/.dockpack/offline-dev-<平台>.tar.gz` | 默认开发离线包 |
+| `<当前目录>/.dockpack/dockpack-cli-<版本>-<主机平台>.*` | `download` 下载的 CLI 离线运行包 |
 | `<项目>/.dockpack/state.json` | 本机开发状态，在目标机器通过 `dev init` 建立 |
 | `<项目>/.dockpack/compose.dev.yaml` | 工具生成的开发 Compose overlay，命令执行时会重写，不用于手动持久配置 |
 | `<项目>/.dockpack/compose.install.yaml` | 安装依赖时临时挂载只读缓存，结束后删除 |

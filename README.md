@@ -108,14 +108,16 @@ dockpack pack inspect .dockpack/offline-dev-linux-amd64.tar.gz
 
 ## 5. 准备离线工具，并传输文件
 
-在联网电脑打开 [GitHub Releases](https://github.com/phobal/dockpack/releases)，从 **Assets** 下载适用于离线机器的 CLI 运行包和同名 `.sha256` 文件。
+在联网电脑执行 `dockpack download`，按空格多选离线机器的主机平台，回车后下载到当前目录的 `.dockpack/`；也可执行 `dockpack download -p linux/amd64` 直接指定平台。命令下载与当前 CLI 相同版本的运行包。
+
+也可以打开 [GitHub Releases](https://github.com/phobal/dockpack/releases)，从 **Assets** 手动下载。
 
 Linux x64 选择 `dockpack-cli-<版本>-linux-x64.tar.gz`。注意下载的是 **dockpack CLI 运行包**，不是 GitHub 自动提供的 Source code；其他系统的选包方式见[离线工具安装说明](./docs/offline-runtime.md)。
 
 需要带走的文件分为两部分：
 
 1. **项目目录**：源码、`.dockpack.yaml`、依赖文件及锁文件、Compose 文件，以及 `.dockpack/` 下刚生成的开发包。项目运行需要的本地配置也要在目标机器准备好。
-2. **dockpack CLI 运行包及其校验文件**：供离线机器直接执行工具，无需访问 npm。
+2. **dockpack CLI 运行包**：供离线机器直接执行工具，无需访问 npm。
 
 建议在离线机器上按下面的结构存放。以下工具版本以 `0.5.0` 为例，请替换为实际下载的版本：
 
@@ -139,7 +141,6 @@ offline-delivery/
 
 ```sh
 cd offline-delivery
-sha256sum -c dockpack-cli-0.5.0-linux-x64.tar.gz.sha256
 tar -xzf dockpack-cli-0.5.0-linux-x64.tar.gz
 export PATH="$PWD/dockpack-cli-0.5.0-linux-x64:$PATH"
 dockpack --version

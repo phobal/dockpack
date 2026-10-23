@@ -4,7 +4,17 @@
 
 ## 选择运行包
 
-在联网机器上从 [GitHub Releases](https://github.com/phobal/dockpack/releases) 的 Assets 下载对应文件及同名 `.sha256` 校验文件，传入离线环境。
+在已安装 dockpack 的联网机器上执行：
+
+```sh
+dockpack download                              # 空格多选主机平台，回车确认
+dockpack download -p linux/amd64                # 指定一个平台
+dockpack download -p linux/amd64 linux/arm64     # 指定多个平台
+```
+
+命令下载与当前 CLI 相同版本的运行包，保存到当前目录的 `.dockpack/`，并在控制台打印保存目录的绝对路径。交互选择时按 Ctrl+C 可取消；在脚本或管道中使用时必须传入 `-p`。
+
+也可以从 [GitHub Releases](https://github.com/phobal/dockpack/releases) 的 Assets 手动下载对应运行包；如需校验，可额外下载同名 `.sha256` 文件。将运行包传入离线环境后解压使用。
 
 | 运行 dockpack 的主机 | 文件名 |
 | --- | --- |
@@ -23,22 +33,18 @@
 以下以 `0.5.0`、macOS Apple Silicon 为例，替换为实际下载文件：
 
 ```sh
-shasum -a 256 -c dockpack-cli-0.5.0-darwin-arm64.tar.gz.sha256
 tar -xzf dockpack-cli-0.5.0-darwin-arm64.tar.gz
 export PATH="$PWD/dockpack-cli-0.5.0-darwin-arm64:$PATH"
 dockpack --version
 ```
 
-Linux 可使用 `sha256sum -c` 校验。将整个解压目录加入 PATH，或者用启动文件的完整路径执行命令。保留完整运行包目录，不能只复制启动文件。
+如果手动下载了校验文件，macOS 可使用 `shasum -a 256 -c <归档>.sha256`、Linux 可使用 `sha256sum -c <归档>.sha256` 校验。将整个解压目录加入 PATH，或者用启动文件的完整路径执行命令。保留完整运行包目录，不能只复制启动文件。
 
 ## Windows PowerShell
 
 以下以 `0.5.0` 为例：
 
 ```powershell
-Get-Content .\dockpack-cli-0.5.0-win32-x64.zip.sha256
-Get-FileHash .\dockpack-cli-0.5.0-win32-x64.zip -Algorithm SHA256
-# 确认两处 SHA-256 相同后再解压
 Expand-Archive .\dockpack-cli-0.5.0-win32-x64.zip -DestinationPath .\tools
 .\tools\dockpack-cli-0.5.0-win32-x64\dockpack.cmd --version
 .\tools\dockpack-cli-0.5.0-win32-x64\dockpack.cmd dev init .\my-project
