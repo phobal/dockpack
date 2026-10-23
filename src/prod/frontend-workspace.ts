@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -42,8 +43,8 @@ export async function createFrontendWorkspace(project: string, source: string, c
   const platform = native?.platform ?? manifest.target_platform;
   const npmCache = path.resolve(native ? path.join(native.directory, "cache", "npm") : path.join(cacheDir, "npm"));
   if (docker.imagePlatform(image) !== platform) throw new DockpackError(`Frontend build image ${image} must target ${platform}.`);
-  console.log(`[dockpack] Frontend build platform: ${platform}; production image platform is unchanged.`);
-  if (platform !== daemonPlatform) console.warn("[dockpack] Native frontend resources are absent; using architecture emulation. Recreate the development bundle on this build machine to include native resources.");
+  logger.info(`[dockpack] Frontend build platform: ${platform}; production image platform is unchanged.`);
+  if (platform !== daemonPlatform) logger.warn("[dockpack] Native frontend resources are absent; using architecture emulation. Recreate the development bundle on this build machine to include native resources.");
   if ([source, npmCache].some(value => value.includes(","))) throw new DockpackError("Docker bind mount paths containing commas are not supported.");
   const fingerprint = createHash("sha256")
     .update("dockpack-frontend-dependencies-v1\0").update(path.resolve(project)).update("\0")
@@ -58,7 +59,7 @@ export async function createFrontendWorkspace(project: string, source: string, c
     "--mount", `type=volume,source=${workspace},target=/workspace`, "--workdir", "/workspace"];
   const cleanup = () => {
     try { docker.run(["volume", "rm", workspace]); }
-    catch (error) { console.warn(`[dockpack] Could not remove temporary workspace volume '${workspace}': ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { logger.warn(`[dockpack] Could not remove temporary workspace volume '${workspace}': ${error instanceof Error ? error.message : String(error)}`); }
   };
   try {
     await productionStep("Preparing Docker workspace and offline frontend dependencies", () => docker.run([

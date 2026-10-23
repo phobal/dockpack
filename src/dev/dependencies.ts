@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -116,7 +117,7 @@ export async function collectNpm(projectDir: string, cacheDir: string, image: st
       await copyFile(path.join(projectDir, "package.json"), path.join(manifests, "package.json"));
       await copyFile(path.join(projectDir, "package-lock.json"), path.join(manifests, "package-lock.json"));
       const phase = offline ? "Offline npm cache validation" : "Online npm dependency collection";
-      console.log(`[dockpack] ${phase}${offline ? " (network disabled)" : ""}...`);
+      logger.info(`[dockpack] ${phase}${offline ? " (network disabled)" : ""}...`);
       try {
         docker.run([
           "run", "--rm", "--pull", "never", "--platform", platform,

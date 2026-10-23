@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
@@ -243,7 +244,7 @@ async function runProjectBuildCommand(root: string, workspace: string, cacheDir:
     "--mount", `type=bind,source=${cacheDir},target=/dockpack-cache,readonly`,
     "--workdir", "/workspace", image, ...command,
   ], { streamOutput: true });
-  console.log(`[dockpack] Running application.build_command in an isolated ${TARGET} container (network disabled)...`);
+  logger.info(`[dockpack] Running application.build_command in an isolated ${TARGET} container (network disabled)...`);
   if (ecosystem === "node") {
     await productionStep("Installing application dependencies offline", () => run(["node", "-e", checkedNpmInstall, "--", "--offline", "--cache", "/dockpack-cache/npm", "--include=dev", "--include=optional"]));
     await productionStep("Running application build command", () => run(buildCommand));
@@ -318,7 +319,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
   const daemon = docker.platform();
   if (daemon.os !== "linux") throw new DockpackError("Production builds require a Docker daemon capable of running Linux containers.");
   const buildEnvironment = docker.buildEnvironment();
-  console.log(`[dockpack] Production Docker builder: ${buildEnvironment.BUILDX_BUILDER} (docker driver)`);
+  logger.info(`[dockpack] Production Docker builder: ${buildEnvironment.BUILDX_BUILDER} (docker driver)`);
   const output = path.resolve(outputPath ?? defaultProductionBundlePath(root, config.target.production_platform));
   const resourcePlatform = config.target.dev_platform === "auto" ? daemon.id : config.target.dev_platform;
   const bundlePath = path.resolve(developmentBundle ?? defaultDevelopmentBundlePath(root, resourcePlatform));
@@ -328,8 +329,8 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
   try {
     await mkdir(stage);
     const bundleRoot = await prepareProductionResources(root, bundlePath, path.join(workDir, "resources"), docker, TARGET);
-    console.log(`[dockpack] Production target platform: ${TARGET}`);
-    console.log(`[dockpack] Production bundle output: ${output}`);
+    logger.info(`[dockpack] Production target platform: ${TARGET}`);
+    logger.info(`[dockpack] Production bundle output: ${output}`);
 
     const composeAnalysis = await analyzeCompose(root, config.compose.files);
     const hasCompose = composeAnalysis.files.length > 0;
@@ -474,7 +475,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     const images = await productionStep("Exporting production images", () => exportProductionImages(deploymentModel, docker, stage, TARGET));
     await writeFile(normalizedPath, stringify(deploymentModel), "utf8");
 
-    for (const finding of findings) console.warn(`dockpack: warning: ${finding}`);
+    for (const finding of findings) logger.warn(`dockpack: warning: ${finding}`);
     const example = [...requiredConfig].sort().map((key) => `${key}=`).join("\n");
     if (example) {
       await writeFile(path.join(composeDir, ".env.example"), `${example}\n`, "utf8");
@@ -500,6 +501,6 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     return output;
   } finally {
     await rm(workDir, { recursive: true, force: true });
-    console.log(`[dockpack] Production build elapsed: ${((Date.now() - totalStarted) / 1000).toFixed(1)}s`);
+    logger.info(`[dockpack] Production build elapsed: ${((Date.now() - totalStarted) / 1000).toFixed(1)}s`);
   }
 }

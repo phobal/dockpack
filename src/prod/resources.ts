@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -16,7 +17,7 @@ export async function prepareProductionResources(projectDir: string, bundlePath:
   if (!existsSync(bundlePath)) {
     throw new DockpackError(`Development resource bundle not found: ${bundlePath}. Run 'dockpack pack dev' on a connected machine first, or specify build prod --bundle <path>. No dev init is required.`);
   }
-  console.log(`[dockpack] Verifying production build resources: ${bundlePath}`);
+  logger.info(`[dockpack] Verifying production build resources: ${bundlePath}`);
   const root = await productionStep("Extracting and verifying build resource archive", () => extractArchive(bundlePath, destination));
   const manifest = parseBundleManifest(JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8")));
   if (manifest.bundle_kind !== "dev") throw new DockpackError("Production build resources must be a development bundle created with 'dockpack pack dev'.");
@@ -45,7 +46,7 @@ export async function prepareProductionResources(projectDir: string, bundlePath:
     }
     if (actual !== expected) throw new DockpackError(`${ecosystem} dependency files differ from the development bundle. Recreate the bundle on a connected machine before building production images.`);
   }
-  console.log("[dockpack] Importing bundled production build images...");
+  logger.info("[dockpack] Importing bundled production build images...");
   for (const filename of await readdir(path.join(root, "images"))) {
     if (filename.endsWith(".tar")) await productionStep(`Importing build images: ${filename}`, () => docker.load(path.join(root, "images", filename)));
   }
@@ -60,7 +61,7 @@ export async function prepareProductionResources(projectDir: string, bundlePath:
     if (native.lock_digest !== manifest.dependencies.node) throw new DockpackError("Native frontend dependency cache does not match the development bundle lock file.");
     const cached = docker.hasImage(native.image) && docker.imageId(native.image) === native.image_id && docker.imagePlatform(native.image) === native.platform;
     if (!cached) await productionStep(`Importing native frontend build image (${native.platform})`, () => docker.load(path.join(native.directory, "images.tar")));
-    else console.log(`[dockpack] Using cached native frontend build image (${native.platform}).`);
+    else logger.info(`[dockpack] Using cached native frontend build image (${native.platform}).`);
     if (docker.imageId(native.image) !== native.image_id || docker.imagePlatform(native.image) !== native.platform) {
       throw new DockpackError("Native frontend build image does not match its bundled identity and platform.");
     }

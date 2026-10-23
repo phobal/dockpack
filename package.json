@@ -33,6 +33,7 @@
     "build:offline": "npm run build && node scripts/build-offline.mjs"
   },
   "dependencies": {
+    "chalk": "^6.0.1",
     "commander": "^13.1.0",
     "tar": "^7.4.3",
     "yaml": "^2.8.0",

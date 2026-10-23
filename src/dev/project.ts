@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -190,8 +191,8 @@ export async function initializeDevProject(projectDir: string, suppliedBundle?: 
       throw new DockpackError(`Default development bundle not found: ${bundlePath}. Copy the matching development bundle to this path or specify --bundle <path>.`);
     }
   }
-  console.log(`[dockpack] Initializing development project: ${root}`);
-  console.log(`[dockpack] Development bundle: ${path.resolve(bundlePath)}`);
+  logger.info(`[dockpack] Initializing development project: ${root}`);
+  logger.info(`[dockpack] Development bundle: ${path.resolve(bundlePath)}`);
   const temp = await mkdtemp(path.join(os.tmpdir(), "dockpack-import-"));
   try {
     const bundleRoot = await extractArchive(bundlePath, temp);
@@ -245,7 +246,7 @@ export async function startDev(projectDir: string): Promise<void> {
   await writeOverlay(root, state, "current", config);
   const serviceNames = config.project.ecosystems.map((ecosystem) => `dockpack-dev-${ecosystem}`);
   const services = [...config.compose.include_services, ...serviceNames];
-  console.log(config.application.dev_command.length > 0
+  logger.info(config.application.dev_command.length > 0
     ? `Starting development server${config.application.dev_port ? ` at http://localhost:${config.application.dev_port}` : ""}. Press Ctrl+C to stop and remove the development containers.`
     : "Starting development containers. No development server was detected; configure application.dev_command and application.dev_port in .dockpack.yaml.");
   let failure: unknown;
@@ -264,7 +265,7 @@ export async function startDev(projectDir: string): Promise<void> {
   try {
     await compose(root, state, ["rm", "-sf", ...services]);
   } catch (cleanupError) {
-    if (failure) console.error(`dockpack: cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    if (failure) logger.error(`dockpack: cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
     else failure = cleanupError;
   }
   if (failure) throw failure;

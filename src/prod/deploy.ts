@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, readFileSync as readTextSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
@@ -124,7 +125,7 @@ async function validateArchivePaths(archivePath: string): Promise<void> {
 
 export async function importProductionBundle(bundlePath: string): Promise<void> {
   const deployment = await loadDeployment(bundlePath, true);
-  console.log(`Imported production bundle ${deployment.manifest.project_name} to ${deployment.root}`);
+  logger.success(`Imported production bundle ${deployment.manifest.project_name} to ${deployment.root}`);
 }
 
 export async function upProduction(bundlePath: string): Promise<void> {
@@ -135,13 +136,13 @@ export async function upProduction(bundlePath: string): Promise<void> {
     throw new DockpackError(`Set required production variables in ${path.join(deployment.root, ".env")} or the process environment: ${missing.join(", ")}`);
   }
   startProduction(deployment);
-  console.log(`Started ${deployment.manifest.project_name}`);
+  logger.success(`Started ${deployment.manifest.project_name}`);
 }
 
 export async function downProduction(bundlePath: string): Promise<void> {
   const deployment = await loadDeployment(bundlePath, false);
   composeCall(deployment, ["down"]);
-  console.log("Stopped Compose services. Named volumes were retained.");
+  logger.success("Stopped Compose services. Named volumes were retained.");
 }
 
 export async function statusProduction(bundlePath: string): Promise<void> {

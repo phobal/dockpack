@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
@@ -25,13 +26,13 @@ function elapsed(milliseconds: number): string {
 
 async function progress<T>(label: string, action: () => Promise<T> | T): Promise<T> {
   const started = Date.now();
-  console.log(`\n[dockpack] ${label}...`);
+  logger.info(`\n[dockpack] ${label}...`);
   try {
     const result = await action();
-    console.log(`[dockpack] ✓ ${label} (${elapsed(Date.now() - started)})`);
+    logger.success(`[dockpack] ✓ ${label} (${elapsed(Date.now() - started)})`);
     return result;
   } catch (error) {
-    console.error(`[dockpack] ✗ ${label} (${elapsed(Date.now() - started)})`);
+    logger.error(`[dockpack] ✗ ${label} (${elapsed(Date.now() - started)})`);
     throw error;
   }
 }
@@ -55,12 +56,12 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
   const root = path.resolve(projectDir);
   const totalStarted = Date.now();
   const docker = new DockerRunner();
-  console.log(`[dockpack] Creating development bundle for ${root}`);
+  logger.info(`[dockpack] Creating development bundle for ${root}`);
   const { config, platform, detections, compose } = await progress("Checking project configuration and Docker", async () => {
     const config = await readConfig(path.join(root, ".dockpack.yaml"));
     if (!docker.available()) throw new DockpackError("Docker CLI and a running daemon are required to create a development bundle.");
     const platform = config.target.dev_platform === "auto" ? docker.platform().id : config.target.dev_platform;
-    console.log(`[dockpack] Development target platform: ${platform}`);
+    logger.info(`[dockpack] Development target platform: ${platform}`);
     const detections = await detectProject(root);
     if (detections.length === 0) throw new DockpackError("No supported Python or Node.js dependency files were detected.");
     for (const item of detections) {
@@ -75,7 +76,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     return { config, platform, detections, compose };
   });
   const output = outputPath ?? defaultDevelopmentBundlePath(root, platform);
-  console.log(`[dockpack] Development bundle output: ${path.resolve(output)}`);
+  logger.info(`[dockpack] Development bundle output: ${path.resolve(output)}`);
   const stage = await mkdtemp(path.join(os.tmpdir(), "dockpack-dev-stage-"));
   try {
     const cacheDir = path.join(stage, "cache");
@@ -150,7 +151,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       const image = service.image;
       const cachedForPlatform = docker.hasImage(image) && docker.imagePlatform(image) === platform;
       if (cachedForPlatform) {
-        console.log(`[dockpack] Using cached Compose service image ${service.name}: ${image} (${platform}).`);
+        logger.info(`[dockpack] Using cached Compose service image ${service.name}: ${image} (${platform}).`);
       } else {
         await progress(`Pulling Compose service image ${service.name}: ${image}`, () => {
           try {
@@ -158,7 +159,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
           } catch (error) {
             const cachedPlatform = docker.hasImage(image) ? docker.imagePlatform(image) : undefined;
             if (cachedPlatform === platform) {
-              console.warn(`[dockpack] Pull failed, using cached ${platform} image ${image}.`);
+              logger.warn(`[dockpack] Pull failed, using cached ${platform} image ${image}.`);
               return;
             }
             const reason = error instanceof Error ? error.message : String(error);
@@ -184,7 +185,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       if (platform !== productionPlatform && images.has(baseImage)) {
         const finding = `Production base image ${baseImage} (${productionPlatform}) shares a development image tag (${platform}); keeping the development image. Prepare the production base separately before an offline production build.`;
         findings.push(finding);
-        console.warn(`[dockpack] ${finding}`);
+        logger.warn(`[dockpack] ${finding}`);
         continue;
       }
       await progress(`Pulling Dockerfile base image ${baseImage} (${productionPlatform})`, () => docker.pull(baseImage, productionPlatform, true));
@@ -215,7 +216,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       findings,
     });
     await progress(`Writing bundle archive ${path.resolve(output)}`, () => createArchive(stage, output, manifest));
-    console.log(`[dockpack] Development bundle completed in ${elapsed(Date.now() - totalStarted)}.`);
+    logger.success(`[dockpack] Development bundle completed in ${elapsed(Date.now() - totalStarted)}.`);
     return path.resolve(output);
   } finally {
     await rm(stage, { recursive: true, force: true });

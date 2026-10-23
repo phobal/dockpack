@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import chalk from "chalk";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
@@ -18,7 +19,7 @@ const { values } = parseArgs({ options: {
   help: { type: "boolean", default: false },
 } });
 if (values.help) {
-  console.log(`Usage: npm run build:offline -- [--target all|${Object.keys(runtime.targets).join("|")}] [--output <directory>]`);
+  console.log(chalk.cyan(`Usage: npm run build:offline -- [--target all|${Object.keys(runtime.targets).join("|")}] [--output <directory>]`));
   process.exit(0);
 }
 const targets = values.target === "all" ? Object.keys(runtime.targets) : [values.target];
@@ -46,7 +47,7 @@ async function fetchRuntime(spec) {
     if (error.code !== "ENOENT") throw error;
   }
   const url = `${runtime.baseUrl}/v${runtime.version}/${spec.archive}`;
-  console.log(`Downloading ${url}`);
+  console.log(chalk.cyan(`Downloading ${url}`));
   const response = await fetch(url, { signal: AbortSignal.timeout(300_000) });
   if (!response.ok) throw new Error(`Node.js download failed: HTTP ${response.status} (${url})`);
   const bytes = Buffer.from(await response.arrayBuffer());
@@ -150,7 +151,7 @@ try {
   }
   const notices = await dependencyNotices(result.metafile.inputs);
   for (const target of targets) {
-    console.log(`Packaging dockpack ${pkg.version} for ${target} (Node.js ${runtime.version})`);
+    console.log(chalk.cyan(`Packaging dockpack ${pkg.version} for ${target} (Node.js ${runtime.version})`));
     const spec = runtime.targets[target];
     const windows = target.startsWith("win32-");
     const name = `dockpack-cli-${pkg.version}-${target}`;
@@ -229,7 +230,7 @@ try {
     } finally {
       await rm(publishStage, { recursive: true, force: true });
     }
-    console.log(`Created ${path.join(output, filename)}`);
+    console.log(chalk.green(`Created ${chalk.bold(path.join(output, filename))}`));
   }
 } finally {
   await rm(work, { recursive: true, force: true });
