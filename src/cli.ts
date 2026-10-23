@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { logger } from "./logger.js";
+import { printBanner } from "./banner.js";
 import chalk, { chalkStderr } from "chalk";
 import { Command } from "commander";
 import { VERSION } from "./version.js";
@@ -26,6 +27,7 @@ program.command("init")
   .description("Analyze a project and create .dockpack.yaml")
   .argument("[project-directory]", "project root", ".")
   .action(async (projectDirectory: string) => {
+    printBanner();
     const result = await initializeProject(projectDirectory);
     logger.success(`${result.created ? "Created" : "Found existing configuration; preserved it"}: ${chalk.bold(result.configPath)}`);
     logger.info(`Project: ${result.config.project.name} (${result.config.project.ecosystems.join(", ") || "not detected"})`);
