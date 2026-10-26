@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { build } from "esbuild";
 import { unzipSync, zipSync } from "fflate";
 import * as tar from "tar";
+import { dependencyNotices } from "./dependency-notices.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -71,29 +72,6 @@ async function filesIn(directory, prefix = "") {
   return files.sort();
 }
 
-async function dependencyNotices(inputs) {
-  const packages = new Map();
-  for (const input of Object.keys(inputs).filter(name => name.replaceAll("\\", "/").includes("node_modules/"))) {
-    let directory = path.dirname(path.resolve(root, input));
-    while (directory !== root && directory !== path.dirname(directory)) {
-      try {
-        const manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
-        if (!manifest.name) { directory = path.dirname(directory); continue; }
-        if (!packages.has(manifest.name)) {
-          const licenses = (await readdir(directory)).filter(name => /^(licen[sc]e|copying|notice)(\..*)?$/i.test(name)).sort();
-          if (!licenses.length) throw new Error(`Missing license text for bundled dependency: ${manifest.name}`);
-          const text = await Promise.all(licenses.map(name => readFile(path.join(directory, name), "utf8")));
-          packages.set(manifest.name, `${manifest.name}@${manifest.version}\n${text.join("\n")}`);
-        }
-        break;
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-        directory = path.dirname(directory);
-      }
-    }
-  }
-  return [...packages.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text).join("\n\n--------------------\n\n");
-}
 
 function posixLauncher(target) {
   const [platform, arch] = target.split("-");
@@ -149,7 +127,7 @@ try {
       if (imported.external && !builtins.has(imported.path)) throw new Error(`Unbundled runtime dependency: ${imported.path}`);
     }
   }
-  const notices = await dependencyNotices(result.metafile.inputs);
+  const notices = await dependencyNotices(result.metafile.inputs, root);
   for (const target of targets) {
     console.log(chalk.cyan(`Packaging dockpack ${pkg.version} for ${target} (Node.js ${runtime.version})`));
     const spec = runtime.targets[target];
