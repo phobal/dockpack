@@ -24,6 +24,15 @@ export const dockpackConfigSchema = z.object({
     name: z.string().min(1),
     ecosystems: z.array(z.enum(["python", "node"])).default([]),
   }).strict(),
+  runtime: z.object({
+    python_version: z.string({ invalid_type_error: 'Python versions must be quoted strings, e.g. "3.12".' })
+      .regex(/^(?:auto|[1-9]\d*\.\d+(?:\.\d+)?)$/, 'Use "auto" or a Python version such as "3.12" or "3.12.7".')
+      .default("auto"),
+    node_version: z.union([z.string(), z.number().int().positive()])
+      .transform(String)
+      .pipe(z.string().regex(/^(?:auto|v?[1-9]\d*(?:\.\d+){0,2})$/, 'Use "auto" or a Node.js version such as "22" or "22.14.0".'))
+      .default("auto"),
+  }).strict().default({}),
   application: z.object({
     service: z.string().default("app"),
     command: z.array(z.string()).default([]),

@@ -4,13 +4,15 @@
 
 ## 先配置这几项
 
-对于没有 Compose 的 npm 前端项目，先确认运行时版本可被识别（例如根目录的 `.nvmrc` 或 `package.json` 的 `engines.node`），再检查以下配置：
+对于没有 Compose 的 npm 前端项目，未声明 Node.js 版本时会默认使用 Node.js 22。可以通过以下 `runtime.node_version` 显式设置项目需要的版本：
 
 ```yaml
 schema_version: 1
 project:
   name: my-frontend
   ecosystems: [node]
+runtime:
+  node_version: "22"
 application:
   dev_command: [npm, run, dev, --, --host, 0.0.0.0, --port, "5173"]
   dev_port: 5173
@@ -52,7 +54,7 @@ dockpack dev start
 - 命令必须是字符串数组，例如 `[npm, run, dev]`，不能写成字符串 `"npm run dev"`。端口参数等数字要加引号，例如 `"5173"`。
 - 命令不自动经 shell 执行。需要 `&&`、管道或变量展开时，显式使用 `[sh, -c, "命令"]`，并确认运行镜像内有对应 shell。
 - `compose.files` 相对于项目根目录解析，与调用命令时的工作目录无关。
-- 此配置没有 `registry`、`node_version`、`python_version`、`environment`、`volumes` 等字段。运行时版本从项目元数据识别；服务环境变量和挂载等使用 Compose/Dockerfile 配置。npm registry 还可能被锁文件中的下载地址固定，修改本机 registry 不一定能改变收集来源。
+- 运行时版本使用嵌套字段 `runtime.node_version` 和 `runtime.python_version`，不能写成顶层 `node_version` 或 `python_version`。此配置没有 `registry`、`environment`、`volumes` 等字段；服务环境变量和挂载等使用 Compose/Dockerfile 配置。npm registry 还可能被锁文件中的下载地址固定，修改本机 registry 不一定能改变收集来源。
 
 ## 完整字段参考
 
@@ -63,6 +65,44 @@ dockpack dev start
 | `schema_version` | 整数 `1` | `1` | 配置格式版本，不是 dockpack 软件版本。 |
 | `project.name` | 非空字符串 | 必填 | 写入包清单，并参与生成生产镜像等名称。初始化时使用项目目录名。 |
 | `project.ecosystems` | 字符串数组，元素为 `node` 或 `python` | `[]` | 决定开发环境安装哪些依赖、创建哪些运行容器；自动生成生产镜像时要求项目只检测到一种运行时。`pack dev` 仍会检测实际依赖文件，修改此列表不会让不受支持的包管理器变得可用。 |
+
+### `runtime`：Node.js 与 Python 运行时版本
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `runtime.node_version` | `auto` 或版本号，如 `"22"`、`"22.14.0"` | `auto` | 控制开发打包、原生前端构建资源及自动生产构建使用的 Node.js 镜像。显式版本优先于项目声明；指定完整版本时保留补丁号。主版本也可写为数字，如 `22`。 |
+| `runtime.python_version` | 字符串 `auto` 或版本号，如 `"3.12"`、`"3.12.7"` | `auto` | 控制开发打包和自动生产构建使用的 Python 镜像。必须加引号；显式版本优先于项目声明，并保留补丁号。 |
+
+```yaml
+runtime:
+  node_version: "22" # 使用 node:22-bookworm-slim
+  python_version: "3.12" # 使用 python:3.12-slim
+```
+
+设置为 `auto` 或省略此字段时，按 `.nvmrc` → `.node-version` → `package.json` 的 `engines.node` → `.tool-versions` → 项目脚本中的 `NODE_VERSION` 顺序检测。沿用已有行为，从检测到的声明中取主版本；需要固定次版本或补丁号时，请显式设置 `runtime.node_version: "22.14.0"`。
+
+也可在项目根目录创建 `.nvmrc`，内容为 `22`，或在 `package.json` 中添加：
+
+```json
+{
+  "engines": { "node": ">=22" }
+}
+```
+
+完全没有版本声明时使用 Node.js 22，控制台会打印默认镜像和配置示例。已声明但无法解析的版本不会被默认值覆盖，会报错并提示修改 `runtime.node_version`、`.nvmrc` 或 `engines.node`。配置字段仅接受 `auto` 或具体版本，不接受 `latest`、`lts/*`、`>=22` 等别名或范围。
+
+Python 的选择顺序为 `runtime.python_version` 显式版本 → `.python-version` → `pyproject.toml` 的 `[project].requires-python` → 默认 **3.12**。`auto` 模式沿用项目声明中的主、次版本，例如 `.python-version` 为 `3.11.9` 时使用 `python:3.11-slim`；需要固定补丁号时设置 `runtime.python_version: "3.11.9"`。
+
+也可在项目根目录创建 `.python-version`，内容为 `3.12`，或在 `pyproject.toml` 中填写：
+
+```toml
+[project]
+requires-python = ">=3.12"
+```
+
+未声明 Python 版本时会使用 `python:3.12-slim` 并打印配置示例。无法解析已有声明时会报错并提示设置方法。`runtime.python_version` 必须是字符串，例如 `"3.10"`；不接受数字、仅主版本 `"3"` 或范围 `">=3.12"`，避免 YAML 将 `3.10` 转成 `3.1`。
+
+已有 `.dockpack.yaml` 无需迁移，省略 `runtime` 即可使用自动选择。`dockpack init` 不会覆盖已有配置；需要显式指定时，手动添加上述 `runtime` 配置。修改版本后，请重新执行 `dockpack pack dev`，将配置和新包一起传给离线机器，并重新执行 `dockpack dev init`。自定义 Dockerfile 内的 `FROM` 仍由项目自行维护。
 
 ### `application`：启动、构建与端口
 

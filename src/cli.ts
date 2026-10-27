@@ -32,6 +32,12 @@ program.command("init")
     const result = await initializeProject(projectDirectory);
     logger.success(`${result.created ? "Created" : "Found existing configuration; preserved it"}: ${chalk.bold(result.configPath)}`);
     logger.info(`Project: ${result.config.project.name} (${result.config.project.ecosystems.join(", ") || "not detected"})`);
+    if (result.config.project.ecosystems.includes("node")) {
+      logger.info(`Node.js 版本：${result.config.runtime.node_version === "auto" ? "auto（按项目声明推断，未声明时默认 22）" : result.config.runtime.node_version}；可在 .dockpack.yaml 的 runtime.node_version 中设置，例如 "22"。`);
+    }
+    if (result.config.project.ecosystems.includes("python")) {
+      logger.info(`Python 版本：${result.config.runtime.python_version === "auto" ? "auto（按项目声明推断，未声明时默认 3.12）" : result.config.runtime.python_version}；可在 .dockpack.yaml 的 runtime.python_version 中设置，例如 "3.12"（须加引号）。`);
+    }
     logger.info(`Compose services: ${result.services.join(", ") || "none detected"}`);
     logger.info(`开发目标平台：${result.config.target.dev_platform}${result.config.target.dev_platform === "auto" ? "（打包时跟随 Docker daemon；交付其他架构时请先修改）" : ""}`);
     logger.info(`开发启动命令：${result.config.application.dev_command.length ? JSON.stringify(result.config.application.dev_command) : "未设置，dev start 将尝试推断"}`);

@@ -65,6 +65,7 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
   const rawConfig = {
     schema_version: 1,
     project: { name: path.basename(root), ecosystems: detections.map((item) => item.ecosystem) },
+    runtime: { node_version: "auto", python_version: "auto" },
     application: {
       service: applicationService,
       command,

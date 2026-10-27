@@ -14,7 +14,7 @@ import { DockerRunner } from "../docker/runner.js";
 import { DockpackError } from "../errors.js";
 import { detectProject } from "../project/detect.js";
 import { exportProductionImages } from "./images.js";
-import { checkedNpmInstall, runtimeImage } from "../dev/dependencies.js";
+import { checkedNpmInstall, runtimeImage, type RuntimeVersions } from "../dev/dependencies.js";
 import { detectStaticFrontend, STATIC_FRONTEND_IMAGE, type StaticFrontend } from "../project/frontend.js";
 import { defaultDevelopmentBundlePath } from "../dev/bundle-path.js";
 import { defaultProductionBundlePath, prepareProductionResources } from "./resources.js";
@@ -158,8 +158,7 @@ async function buildGeneratedApplication(root: string, stage: string, image: str
   const command = config.application.command;
   const frontend = detection.ecosystem === "node" ? await detectStaticFrontend(root, command, config.application.build_command) : undefined;
   if (!frontend && command.length === 0) throw new DockpackError("Set application.command in .dockpack.yaml; Dockpack could not safely infer how to start this project.");
-  const runtime = (await import("../dev/dependencies.js")).runtimeImage(detection, root);
-  const baseImage = await runtime;
+  const baseImage = await runtimeImage(detection, root, config.runtime);
   if (!docker.hasImage(baseImage)) throw new DockpackError(`Required base image ${baseImage} is not present locally. Prepare it in the development bundle before going offline.`);
   if (frontend) {
     await buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend);
@@ -229,11 +228,11 @@ async function validateOfflineBuild(serviceName: string, root: string, buildValu
   }
 }
 
-async function runProjectBuildCommand(root: string, workspace: string, cacheDir: string, docker: DockerRunner, ecosystem: string, buildCommand: string[]): Promise<void> {
+async function runProjectBuildCommand(root: string, workspace: string, cacheDir: string, docker: DockerRunner, ecosystem: string, buildCommand: string[], runtime: RuntimeVersions): Promise<void> {
   if (buildCommand.length === 0) throw new DockpackError("Set application.build_command in .dockpack.yaml to build the project before its existing Dockerfile is packaged.");
   const detection = (await detectProject(root)).find((item) => item.ecosystem === ecosystem);
   if (!detection) throw new DockpackError(`Cannot detect the ${ecosystem} runtime needed by application.build_command.`);
-  const image = await runtimeImage(detection, root);
+  const image = await runtimeImage(detection, root, runtime);
   if (!docker.hasImage(image) || docker.imagePlatform(image) !== TARGET) throw new DockpackError(`The build command needs a local ${TARGET} runtime image: ${image}. Recreate the development bundle.`);
   const frontend = ecosystem === "node" ? await detectStaticFrontend(root, [], buildCommand) : undefined;
   await prepareContext(root, workspace, frontend?.mode);
@@ -386,7 +385,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
         const ecosystem = config.project.ecosystems[0];
         if (!ecosystem) throw new DockpackError("No project runtime is configured for application.build_command.");
         const workspace = path.join(workDir, "application-workspace");
-        await runProjectBuildCommand(root, workspace, path.join(bundleRoot, "cache"), docker, ecosystem, config.application.build_command);
+        await runProjectBuildCommand(root, workspace, path.join(bundleRoot, "cache"), docker, ecosystem, config.application.build_command, config.runtime);
         await validateOfflineBuild(appService, workspace, { context: ".", dockerfile: "Dockerfile" });
         const image = String(services[appService]?.image || generatedImage);
         overrideServices[appService] = { image, build: { context: workspace, dockerfile: "Dockerfile", network: "none" } };

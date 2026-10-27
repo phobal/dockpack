@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { DockerRunner } from "../docker/runner.js";
 import type { EcosystemDetection } from "../project/detect.js";
-import { collectNpm, runtimeImage } from "./dependencies.js";
+import { collectNpm, runtimeImage, type RuntimeVersions } from "./dependencies.js";
 
 const resourceSchema = z.object({
   platform: z.enum(["linux/amd64", "linux/arm64"]),
@@ -24,12 +24,12 @@ export async function readNativeBuildResource(root: string, platform: string) {
   }
 }
 
-export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner): Promise<void> {
+export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner, runtimeVersions: RuntimeVersions = {}): Promise<void> {
   const platform = docker.platform().id;
   if (platform === developmentPlatform || !["linux/amd64", "linux/arm64"].includes(platform)) return;
   const directory = path.join(stage, "build-resources", platform.replaceAll("/", "-"));
   await mkdir(directory, { recursive: true });
-  const runtime = await runtimeImage(detection, project);
+  const runtime = await runtimeImage(detection, project, runtimeVersions);
   const original = docker.hasImage(runtime) ? docker.imageId(runtime) : undefined;
   let image: string;
   let imageId: string;

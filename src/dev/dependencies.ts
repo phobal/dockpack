@@ -6,6 +6,9 @@ import path from "node:path";
 import { DockpackError } from "../errors.js";
 import { DockerRunner } from "../docker/runner.js";
 import type { EcosystemDetection } from "../project/detect.js";
+import type { DockpackConfig } from "../config/schema.js";
+
+export type RuntimeVersions = Partial<DockpackConfig["runtime"]>;
 
 export interface CollectedDependency {
   ecosystem: "python" | "node";
@@ -14,7 +17,26 @@ export interface CollectedDependency {
   lockFiles: string[];
 }
 
-export async function runtimeImage(detection: EcosystemDetection, projectDir: string): Promise<string> {
+const DEFAULT_NODE_VERSION = "22";
+const DEFAULT_PYTHON_VERSION = "3.12";
+const PYTHON_VERSION_GUIDANCE = '可在项目根目录的 .dockpack.yaml 中设置 runtime.python_version，例如：\n' +
+  'runtime:\n  python_version: "3.12"\n' +
+  '版本必须加引号。也可在 .python-version 中填写 3.12，或在 pyproject.toml 的 [project] 中设置 requires-python = ">=3.12"。\n' +
+  '优先级：runtime.python_version 显式版本 > 项目版本声明 > 默认 Python 3.12。修改后请重新执行 dockpack pack dev。';
+const NODE_VERSION_GUIDANCE = '可在项目根目录的 .dockpack.yaml 中设置 runtime.node_version，例如：\n' +
+  'runtime:\n  node_version: "22"\n' +
+  '也可在 .nvmrc 中填写 22，或在 package.json 中设置 "engines": { "node": ">=22" }（engines.node）。\n' +
+  '优先级：runtime.node_version 显式版本 > 项目版本声明 > 默认 Node.js 22。修改后请重新执行 dockpack pack dev。';
+
+export async function runtimeImage(detection: EcosystemDetection, projectDir: string, runtime: RuntimeVersions = {}): Promise<string> {
+  const nodeVersion = runtime.node_version ?? "auto";
+  const pythonVersion = runtime.python_version ?? "auto";
+  if (detection.ecosystem === "node" && nodeVersion !== "auto") {
+    return `node:${nodeVersion.replace(/^v/, "")}-bookworm-slim`;
+  }
+  if (detection.ecosystem === "python" && pythonVersion !== "auto") {
+    return `python:${pythonVersion}-slim`;
+  }
   const versionFile = path.join(projectDir, detection.ecosystem === "python" ? ".python-version" : ".nvmrc");
   let hint = detection.runtimeConstraint ?? "";
   try {
@@ -22,10 +44,21 @@ export async function runtimeImage(detection: EcosystemDetection, projectDir: st
   } catch {
     // The runtime constraint from the project manifest remains the fallback.
   }
+  if (detection.ecosystem === "node" && !hint.trim()) {
+    logger.warn(`[dockpack] 未指定 Node.js 版本，将使用默认 Node.js ${DEFAULT_NODE_VERSION}（node:${DEFAULT_NODE_VERSION}-bookworm-slim）。\n${NODE_VERSION_GUIDANCE}`);
+    return `node:${DEFAULT_NODE_VERSION}-bookworm-slim`;
+  }
+  if (detection.ecosystem === "python" && !hint.trim()) {
+    logger.warn(`[dockpack] 未指定 Python 版本，将使用默认 Python ${DEFAULT_PYTHON_VERSION}（python:${DEFAULT_PYTHON_VERSION}-slim）。\n${PYTHON_VERSION_GUIDANCE}`);
+    return `python:${DEFAULT_PYTHON_VERSION}-slim`;
+  }
   const match = hint.match(/(\d+)(?:\.(\d+))?/);
-  if (!match?.[1]) throw new DockpackError(`Cannot infer a ${detection.ecosystem} version. Add ${detection.ecosystem === "python" ? ".python-version" : ".nvmrc"} or a runtime constraint.`);
+  if (!match?.[1]) {
+    if (detection.ecosystem === "node") throw new DockpackError(`Cannot infer a Node.js version from '${hint}'.\n${NODE_VERSION_GUIDANCE}`);
+    throw new DockpackError(`Cannot infer a Python version from '${hint}'.\n${PYTHON_VERSION_GUIDANCE}`);
+  }
   if (detection.ecosystem === "python") {
-    if (!match[2]) throw new DockpackError("Python runtime needs a major.minor version such as 3.12.");
+    if (!match[2]) throw new DockpackError(`Python runtime needs a major.minor version such as 3.12; received '${hint}'.\n${PYTHON_VERSION_GUIDANCE}`);
     return `python:${match[1]}.${match[2]}-slim`;
   }
   return `node:${match[1]}-bookworm-slim`;

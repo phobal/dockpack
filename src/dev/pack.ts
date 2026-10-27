@@ -86,7 +86,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     const dependencies: CollectedDependency[] = [];
     const images = new Set<string>();
     for (const detection of detections) {
-      const image = await runtimeImage(detection, root);
+      const image = await runtimeImage(detection, root, config.runtime);
       await progress(`Pulling ${detection.ecosystem} runtime image ${image}`, () => docker.pull(image, platform, true));
       images.add(image);
       const dependency = await progress(`Collecting ${detection.ecosystem} offline dependencies`, () => detection.ecosystem === "python"
@@ -202,7 +202,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     }
     const nodeDetection = detections.find(item => item.ecosystem === "node");
     if (nodeDetection && await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
-      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker));
+      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker, config.runtime));
     }
 
     const manifest = makeManifest({

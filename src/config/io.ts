@@ -12,6 +12,9 @@ const CONFIG_COMMENTS: Record<string, string> = {
   project: "项目标识与开发容器类型。",
   "project.name": "项目名称，用于离线包清单及生成的镜像名称。",
   "project.ecosystems": "开发运行时：node、python，可同时填写；应与实际项目一致。",
+  runtime: "运行时版本配置。修改后请重新执行 dockpack pack dev，并在离线端重新 dev init。",
+  "runtime.python_version": 'auto 从 .python-version 或 pyproject.toml 的 requires-python 推断；未声明时使用 Python 3.12 并提示。可显式设置为 "3.12" 或 "3.12.7"，优先于项目声明。版本必须加引号，避免 YAML 将 3.10 解析成 3.1。',
+  "runtime.node_version": 'auto 按项目声明推断 Node.js 版本（如 .nvmrc、.node-version、package.json engines.node）；未声明时使用 Node.js 22 并提示。可显式设置为 "22" 或 "22.14.0"，优先于项目声明。',
   application: "命令按参数拆成数组，例如 [npm, run, dev]；不会自动经过 shell。",
   "application.service": "原 Compose 中的应用服务名；开发打包会用 dockpack 开发容器替代此服务。无 Compose 时保留 app。",
   "application.command": "生产启动命令；自动生成生产镜像时使用，不覆盖已有 Compose/Dockerfile 的命令。",
@@ -36,7 +39,7 @@ const CONFIG_COMMENTS: Record<string, string> = {
 
 function configWithComments(config: DockpackConfig): string {
   const document = new Document(config);
-  document.commentBefore = " dockpack 项目配置。先检查 target.dev_platform、application.dev_command 和 dev_port。\n 重新执行 dockpack init 会保留已有文件，不会覆盖您的修改。\n 完整字段说明：https://github.com/phobal/dockpack/blob/main/docs/configuration.md";
+  document.commentBefore = " dockpack 项目配置。先检查 runtime.node_version、runtime.python_version、target.dev_platform、application.dev_command 和 dev_port。\n 重新执行 dockpack init 会保留已有文件，不会覆盖您的修改。\n 完整字段说明：https://github.com/phobal/dockpack/blob/main/docs/configuration.md";
   for (const [key, comment] of Object.entries(CONFIG_COMMENTS)) {
     const node = document.getIn(key.split("."), true);
     if (isNode(node)) node.commentBefore = ` ${comment}`;
