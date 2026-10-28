@@ -208,6 +208,7 @@ dockpack dev rebuild               # 使用已有离线缓存重新安装依赖
 ```sh
 dockpack pack dev ./my-project -o ./custom-dev.tar.gz
 dockpack pack dev ./my-project --pull always  # 更新镜像；默认 missing 复用本地目标架构镜像
+dockpack pack dev ./my-project --refresh-dependencies  # 强制刷新依赖；默认复用已验证缓存
 dockpack dev init ./my-project --bundle ./custom-dev.tar.gz
 dockpack dev start ./my-project
 ```

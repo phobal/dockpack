@@ -3,7 +3,8 @@ import path from "node:path";
 import { z } from "zod";
 import { DockerRunner } from "../docker/runner.js";
 import type { EcosystemDetection } from "../project/detect.js";
-import { collectNpm, runtimeImage, type RuntimeVersions } from "./dependencies.js";
+import { runtimeImage, type RuntimeVersions } from "./dependencies.js";
+import { collectDependencies } from "./dependency-cache.js";
 
 const resourceSchema = z.object({
   platform: z.enum(["linux/amd64", "linux/arm64"]),
@@ -24,7 +25,7 @@ export async function readNativeBuildResource(root: string, platform: string) {
   }
 }
 
-export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner, runtimeVersions: RuntimeVersions = {}, ensureImage = (image: string, target: string) => docker.pull(image, target, true)): Promise<void> {
+export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner, runtimeVersions: RuntimeVersions = {}, ensureImage = (image: string, target: string) => docker.pull(image, target, true), refreshDependencies = false): Promise<void> {
   const platform = docker.platform().id;
   if (platform === developmentPlatform || !["linux/amd64", "linux/arm64"].includes(platform)) return;
   const directory = path.join(stage, "build-resources", platform.replaceAll("/", "-"));
@@ -43,7 +44,7 @@ export async function collectNativeBuildResource(project: string, stage: string,
     // Keep the development image tag pointing at its original architecture.
     if (original) docker.run(["image", "tag", original, runtime]);
   }
-  const dependency = await collectNpm(project, path.join(directory, "cache"), image, docker, platform);
+  const dependency = await collectDependencies(project, path.join(directory, "cache"), image, docker, platform, "node", refreshDependencies);
   docker.save([image], path.join(directory, "images.tar"), true);
   const resource = resourceSchema.parse({ platform, image, image_id: imageId, lock_digest: dependency.lockDigest });
   await writeFile(path.join(directory, "resource.json"), JSON.stringify(resource, null, 2), "utf8");

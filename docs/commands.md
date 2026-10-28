@@ -8,7 +8,7 @@
 | --- | --- |
 | `dockpack init [project-directory]` | 检测项目，新建带注释的 `.dockpack.yaml`；已有配置保留 |
 | `dockpack download [-p <platforms...>]` | 联网下载当前 CLI 版本的离线运行包到当前目录的 `.dockpack/`，未传平台时交互多选 |
-| `dockpack pack dev [project-directory] [-o <archive>] [--pull <policy>]` | 联网收集镜像与依赖，默认输出到项目 `.dockpack/offline-dev-<平台>.tar.gz` |
+| `dockpack pack dev [project-directory] [-o <archive>] [--pull <policy>] [--refresh-dependencies]` | 联网收集镜像与依赖，默认输出到项目 `.dockpack/offline-dev-<平台>.tar.gz` |
 | `dockpack pack inspect <archive>` | 校验离线包并显示类型、平台、镜像等清单信息 |
 | `dockpack dev init [project-directory] [--bundle <archive>]` | 离线导入开发包、安装依赖并初始化本机状态；默认查找项目内对应平台的包 |
 | `dockpack dev start [project-directory]` | 前台启动开发服务，显示日志 |
@@ -88,3 +88,18 @@ dockpack pack dev --pull never          # 仅使用本地镜像，缺失或架�
 策略适用于运行时镜像、Compose 配套服务镜像、Dockerfile 生产基础镜像和前端原生构建资源镜像。同一次打包按镜像引用与架构去重；若镜像标签被其他架构替换，会重新检查。默认策略也会复用本地 `latest`，需要更新时显式使用 `always`。不同标签或别名仍按不同引用处理。
 
 `never` 仅限制上述镜像收集，不代表整个打包过程断网：依赖下载和 Compose 构建仍可能访问网络。修改目标平台后须准备匹配架构的镜像。
+
+### 重复打包的依赖缓存
+
+`pack dev` 将成功收集的 npm 缓存、Python wheel 和 uv 导出的固定依赖保留在项目 `.dockpack/cache/dependencies/`。再次打包时，依赖输入、目标平台、运行时镜像引用及镜像 ID、CLI 版本均一致，且缓存文件完整性校验通过，就直接将已验证资源复制到新包，跳过下载和重复安装验证。前端原生构建资源也使用同一机制。
+
+npm 的缓存键包含 `package.json`、`package-lock.json` 和可选 `.npmrc`；uv 包含 `pyproject.toml`、`uv.lock` 和可选 `uv.toml`。普通 pip requirements 会跟踪 `-r` / `-c` 引用文件；本地依赖、动态环境变量及无法可靠跟踪的选项继续重新收集。首次缓存仍运行原有收集及验证流程，失败不会发布新缓存。缓存损坏会自动重新收集。
+
+```bash
+dockpack pack dev                         # 自动复用符合条件的依赖缓存
+dockpack pack dev --refresh-dependencies  # 强制重新收集并更新缓存
+```
+
+依赖声明或架构变化后会生成新的缓存条目。镜像拉取策略 `--pull` 与依赖刷新分别控制；`--pull always` 只有在镜像 ID 改变时才使依赖缓存失效。普通 requirements 若未固定版本，重复打包也会复用上次解析结果，需要检查上游更新时使用 `--refresh-dependencies`。变更仓库环境或包管理器的外部配置后也应显式刷新。
+
+删除 `.dockpack/cache/dependencies/` 可释放缓存空间，下次打包会重新收集。该缓存只用于联网准备，不替代交付给离线机器的完整开发资源包。不同依赖输入的条目暂不共享增量下载缓存。

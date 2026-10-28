@@ -62,8 +62,9 @@ pack.command("dev")
   .argument("[project-directory]", "project root (defaults to the current working directory)", ".")
   .option("-o, --output <path>", "output archive path (default: <project>/.dockpack/offline-dev-<platform>.tar.gz)")
   .addOption(new Option("--pull <policy>", "image pull policy").choices(["missing", "always", "never"]).default("missing"))
-  .action(async (projectDirectory: string, options: { output?: string; pull: PullPolicy }) => {
-    const output = await createDevelopmentBundle(projectDirectory, options.output, options.pull);
+  .option("--refresh-dependencies", "recollect dependencies instead of reusing the persistent cache")
+  .action(async (projectDirectory: string, options: { output?: string; pull: PullPolicy; refreshDependencies?: boolean }) => {
+    const output = await createDevelopmentBundle(projectDirectory, options.output, options.pull, options.refreshDependencies);
     logger.success(`Created development bundle: ${output}`);
     logger.info(offlineRuntimeHint());
   });

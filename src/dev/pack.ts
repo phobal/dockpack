@@ -14,9 +14,10 @@ import { DockerRunner } from "../docker/runner.js";
 import { createImageCollector, type PullPolicy } from "../docker/collect.js";
 import { detectProject } from "../project/detect.js";
 import { stringify, YAMLSeq } from "yaml";
-import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
+import { runtimeImage, type CollectedDependency } from "./dependencies.js";
 import { defaultDevelopmentBundlePath } from "./bundle-path.js";
 import { detectStaticFrontend, STATIC_FRONTEND_IMAGE } from "../project/frontend.js";
+import { collectDependencies } from "./dependency-cache.js";
 import { collectNativeBuildResource } from "./build-resources.js";
 
 function elapsed(milliseconds: number): string {
@@ -53,7 +54,7 @@ async function dockerfileBaseImages(filename: string): Promise<string[]> {
   return [...result];
 }
 
-export async function createDevelopmentBundle(projectDir: string, outputPath?: string, pullPolicy: PullPolicy = "missing"): Promise<string> {
+export async function createDevelopmentBundle(projectDir: string, outputPath?: string, pullPolicy: PullPolicy = "missing", refreshDependencies = false): Promise<string> {
   const root = path.resolve(projectDir);
   const totalStarted = Date.now();
   const docker = new DockerRunner();
@@ -91,9 +92,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       const image = await runtimeImage(detection, root, config.runtime);
       await progress(`Collecting ${detection.ecosystem} runtime image ${image}`, () => ensureImage(image, platform));
       images.add(image);
-      const dependency = await progress(`Collecting ${detection.ecosystem} offline dependencies`, () => detection.ecosystem === "python"
-        ? collectPython(root, cacheDir, image, docker, platform)
-        : collectNpm(root, cacheDir, image, docker, platform));
+      const dependency = await progress(`Collecting ${detection.ecosystem} offline dependencies`, () => collectDependencies(root, cacheDir, image, docker, platform, detection.ecosystem, refreshDependencies));
       dependencies.push(dependency);
     }
 
@@ -192,7 +191,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     }
     const nodeDetection = detections.find(item => item.ecosystem === "node");
     if (nodeDetection && await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
-      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker, config.runtime, ensureImage));
+      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker, config.runtime, ensureImage, refreshDependencies));
     }
 
     const manifest = makeManifest({
