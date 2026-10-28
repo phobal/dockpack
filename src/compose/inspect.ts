@@ -156,8 +156,9 @@ export async function analyzeCompose(projectDir: string, configuredFiles?: strin
     }
     if (command[0] === "docker") for (const profile of profiles) args.push("--profile", profile);
     args.push("config");
-    if (command[0] === "docker") args.push("--format", "json", "--no-interpolate");
-    else args.push("--no-interpolate");
+    // Image collection needs concrete references, including shell and .env values.
+    // resolveComposeModel separately preserves variables for deployment output.
+    if (command[0] === "docker") args.push("--format", "json");
     const result = spawnSync(command[0]!, args, { cwd: projectDir, encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
     if (result.status === 0) {
       try {
