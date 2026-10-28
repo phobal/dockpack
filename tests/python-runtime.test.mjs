@@ -75,6 +75,7 @@ for (const configured of [undefined, "3.11"]) {
   }, async root => {
     for (const method of ["warn", "info", "error", "success"]) t.mock.method(logger, method, () => {});
     t.mock.method(DockerRunner.prototype, "available", () => true);
+    t.mock.method(DockerRunner.prototype, "hasImage", () => false);
     t.mock.method(DockerRunner.prototype, "platform", () => ({ id: "linux/amd64" }));
     const stop = new Error("Stop before pulling Docker images");
     const pull = t.mock.method(DockerRunner.prototype, "pull", () => { throw stop; });

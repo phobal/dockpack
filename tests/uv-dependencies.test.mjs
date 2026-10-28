@@ -35,6 +35,7 @@ test("uv.lock remains authoritative when requirements.txt also exists", () => pr
 test("pack dev accepts uv projects and reaches runtime image collection", t => project({ ".dockpack.yaml": 'project:\n  name: backend\n  ecosystems: [python]\nruntime:\n  python_version: "3.12"\n' }, async root => {
   for (const method of ["warn", "info", "error", "success"]) t.mock.method(logger, method, () => {});
   t.mock.method(DockerRunner.prototype, "available", () => true);
+  t.mock.method(DockerRunner.prototype, "hasImage", () => false);
   t.mock.method(DockerRunner.prototype, "platform", () => ({ id: "linux/amd64" }));
   const stop = new Error("runtime collection reached");
   t.mock.method(DockerRunner.prototype, "pull", () => { throw stop; });
@@ -118,6 +119,7 @@ async function uvBundle(root) {
 function mockDocker(t) {
   for (const method of ["warn", "info", "error", "success"]) t.mock.method(logger, method, () => {});
   t.mock.method(DockerRunner.prototype, "available", () => true);
+  t.mock.method(DockerRunner.prototype, "hasImage", () => false);
   t.mock.method(DockerRunner.prototype, "platform", () => ({ id: "linux/amd64", os: "linux" }));
   t.mock.method(DockerRunner.prototype, "load", () => {});
   t.mock.method(DockerRunner.prototype, "hasImage", () => true);

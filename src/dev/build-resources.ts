@@ -24,7 +24,7 @@ export async function readNativeBuildResource(root: string, platform: string) {
   }
 }
 
-export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner, runtimeVersions: RuntimeVersions = {}): Promise<void> {
+export async function collectNativeBuildResource(project: string, stage: string, detection: EcosystemDetection, developmentPlatform: string, docker: DockerRunner, runtimeVersions: RuntimeVersions = {}, ensureImage = (image: string, target: string) => docker.pull(image, target, true)): Promise<void> {
   const platform = docker.platform().id;
   if (platform === developmentPlatform || !["linux/amd64", "linux/arm64"].includes(platform)) return;
   const directory = path.join(stage, "build-resources", platform.replaceAll("/", "-"));
@@ -34,7 +34,7 @@ export async function collectNativeBuildResource(project: string, stage: string,
   let image: string;
   let imageId: string;
   try {
-    docker.pull(runtime, platform, true);
+    ensureImage(runtime, platform);
     if (docker.imagePlatform(runtime) !== platform) throw new Error(`Native build image must target ${platform}.`);
     imageId = docker.imageId(runtime);
     image = `dockpack/build-node:sha256-${imageId.slice("sha256:".length)}`;

@@ -11,6 +11,7 @@ import { DockpackError } from "../errors.js";
 import { createArchive } from "../bundles/archive.js";
 import { makeManifest } from "../bundles/manifest.js";
 import { DockerRunner } from "../docker/runner.js";
+import { createImageCollector, type PullPolicy } from "../docker/collect.js";
 import { detectProject } from "../project/detect.js";
 import { stringify, YAMLSeq } from "yaml";
 import { collectNpm, collectPython, runtimeImage, type CollectedDependency } from "./dependencies.js";
@@ -52,10 +53,11 @@ async function dockerfileBaseImages(filename: string): Promise<string[]> {
   return [...result];
 }
 
-export async function createDevelopmentBundle(projectDir: string, outputPath?: string): Promise<string> {
+export async function createDevelopmentBundle(projectDir: string, outputPath?: string, pullPolicy: PullPolicy = "missing"): Promise<string> {
   const root = path.resolve(projectDir);
   const totalStarted = Date.now();
   const docker = new DockerRunner();
+  const ensureImage = createImageCollector(docker, pullPolicy);
   logger.info(`[dockpack] Creating development bundle for ${root}`);
   const { config, platform, detections, compose } = await progress("Checking project configuration and Docker", async () => {
     const config = await readConfig(path.join(root, ".dockpack.yaml"));
@@ -87,7 +89,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     const images = new Set<string>();
     for (const detection of detections) {
       const image = await runtimeImage(detection, root, config.runtime);
-      await progress(`Pulling ${detection.ecosystem} runtime image ${image}`, () => docker.pull(image, platform, true));
+      await progress(`Collecting ${detection.ecosystem} runtime image ${image}`, () => ensureImage(image, platform));
       images.add(image);
       const dependency = await progress(`Collecting ${detection.ecosystem} offline dependencies`, () => detection.ecosystem === "python"
         ? collectPython(root, cacheDir, image, docker, platform)
@@ -149,28 +151,16 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       if (service.build) continue;
       if (!service.image) throw new DockpackError(`Compose service '${service.name}' has neither a build image nor image reference.`);
       const image = service.image;
-      const cachedForPlatform = docker.hasImage(image) && docker.imagePlatform(image) === platform;
-      if (cachedForPlatform) {
-        logger.info(`[dockpack] Using cached Compose service image ${service.name}: ${image} (${platform}).`);
-      } else {
-        await progress(`Pulling Compose service image ${service.name}: ${image}`, () => {
-          try {
-            docker.pull(image, platform, true);
-          } catch (error) {
-            const cachedPlatform = docker.hasImage(image) ? docker.imagePlatform(image) : undefined;
-            if (cachedPlatform === platform) {
-              logger.warn(`[dockpack] Pull failed, using cached ${platform} image ${image}.`);
-              return;
-            }
-            const reason = error instanceof Error ? error.message : String(error);
-            throw new DockpackError(
-              `Cannot package Compose service '${service.name}' image '${image}' for ${platform}. ` +
-              `Check that the image reference is valid and accessible, or load a matching image into Docker first. ${reason}`,
-              { cause: error },
-            );
-          }
-        });
-      }
+      await progress(`Collecting Compose service image ${service.name}: ${image}`, () => {
+        try {
+          ensureImage(image, platform);
+        } catch (error) {
+          throw new DockpackError(
+            `Cannot package Compose service '${service.name}' image '${image}' for ${platform}. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+      });
       images.add(service.image);
     }
     const findings: string[] = [];
@@ -188,7 +178,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
         logger.warn(`[dockpack] ${finding}`);
         continue;
       }
-      await progress(`Pulling Dockerfile base image ${baseImage} (${productionPlatform})`, () => docker.pull(baseImage, productionPlatform, true));
+      await progress(`Collecting Dockerfile base image ${baseImage} (${productionPlatform})`, () => ensureImage(baseImage, productionPlatform));
       images.add(baseImage);
     }
     for (const image of developmentImages) {
@@ -202,7 +192,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     }
     const nodeDetection = detections.find(item => item.ecosystem === "node");
     if (nodeDetection && await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
-      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker, config.runtime));
+      await progress("Preparing native frontend build resources", () => collectNativeBuildResource(root, stage, nodeDetection, platform, docker, config.runtime, ensureImage));
     }
 
     const manifest = makeManifest({

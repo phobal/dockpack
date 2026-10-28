@@ -3,7 +3,8 @@ import { logger } from "./logger.js";
 import { printBanner } from "./banner.js";
 import { downloadOfflineCli } from "./commands/download.js";
 import chalk, { chalkStderr } from "chalk";
-import { Command } from "commander";
+import { Command, Option } from "commander";
+import type { PullPolicy } from "./docker/collect.js";
 import { VERSION } from "./version.js";
 import { inspectArchive } from "./bundles/archive.js";
 import { bundleCachePath, bundleFingerprint, extractArchive } from "./bundles/archive.js";
@@ -60,8 +61,9 @@ pack.command("dev")
   .description("Create an offline development bundle on a connected machine")
   .argument("[project-directory]", "project root (defaults to the current working directory)", ".")
   .option("-o, --output <path>", "output archive path (default: <project>/.dockpack/offline-dev-<platform>.tar.gz)")
-  .action(async (projectDirectory: string, options: { output?: string }) => {
-    const output = await createDevelopmentBundle(projectDirectory, options.output);
+  .addOption(new Option("--pull <policy>", "image pull policy").choices(["missing", "always", "never"]).default("missing"))
+  .action(async (projectDirectory: string, options: { output?: string; pull: PullPolicy }) => {
+    const output = await createDevelopmentBundle(projectDirectory, options.output, options.pull);
     logger.success(`Created development bundle: ${output}`);
     logger.info(offlineRuntimeHint());
   });

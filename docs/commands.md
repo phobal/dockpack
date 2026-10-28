@@ -8,7 +8,7 @@
 | --- | --- |
 | `dockpack init [project-directory]` | 检测项目，新建带注释的 `.dockpack.yaml`；已有配置保留 |
 | `dockpack download [-p <platforms...>]` | 联网下载当前 CLI 版本的离线运行包到当前目录的 `.dockpack/`，未传平台时交互多选 |
-| `dockpack pack dev [project-directory] [-o <archive>]` | 联网收集镜像与依赖，默认输出到项目 `.dockpack/offline-dev-<平台>.tar.gz` |
+| `dockpack pack dev [project-directory] [-o <archive>] [--pull <policy>]` | 联网收集镜像与依赖，默认输出到项目 `.dockpack/offline-dev-<平台>.tar.gz` |
 | `dockpack pack inspect <archive>` | 校验离线包并显示类型、平台、镜像等清单信息 |
 | `dockpack dev init [project-directory] [--bundle <archive>]` | 离线导入开发包、安装依赖并初始化本机状态；默认查找项目内对应平台的包 |
 | `dockpack dev start [project-directory]` | 前台启动开发服务，显示日志 |
@@ -74,3 +74,17 @@ dockpack download -p linux/amd64 -p windows/amd64       # 可重复使用 -p
 归档为带清单和 SHA-256 校验和的 gzip tar 包，导入和检查时会验证内容。生成的开发 overlay 使用 `DOCKPACK_PROJECT_DIR` 挂载源码，调用 Compose 时由工具设置该变量；开发状态和 overlay 不记录源机器上的绝对项目或缓存路径。
 
 使用同一个有 Docker 权限的账号完成初始化和后续开发，避免不同账号访问到不同的导入缓存。
+
+### 镜像拉取策略
+
+`pack dev` 默认使用 `--pull missing`：本地存在目标架构镜像时直接复用，仅在缺失或架构不匹配时拉取。
+
+```bash
+dockpack pack dev                       # 默认复用本地镜像
+dockpack pack dev --pull always         # 强制检查并拉取远程更新
+dockpack pack dev --pull never          # 仅使用本地镜像，缺失或架构不匹配时报错
+```
+
+策略适用于运行时镜像、Compose 配套服务镜像、Dockerfile 生产基础镜像和前端原生构建资源镜像。同一次打包按镜像引用与架构去重；若镜像标签被其他架构替换，会重新检查。默认策略也会复用本地 `latest`，需要更新时显式使用 `always`。不同标签或别名仍按不同引用处理。
+
+`never` 仅限制上述镜像收集，不代表整个打包过程断网：依赖下载和 Compose 构建仍可能访问网络。修改目标平台后须准备匹配架构的镜像。
