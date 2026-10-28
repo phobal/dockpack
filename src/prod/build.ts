@@ -22,8 +22,6 @@ import { defaultProductionBundlePath, prepareProductionResources } from "./resou
 import { createFrontendWorkspace } from "./frontend-workspace.js";
 import { productionStep } from "./progress.js";
 
-const TARGET = "linux/amd64";
-
 function appImageName(projectName: string, service: string): string {
   const clean = `${projectName}-${service}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
   return `dockpack/${clean}:offline`;
@@ -93,9 +91,9 @@ await rm(path.resolve("/workspace", output), { recursive: true, force: true });
 await writeFile("/workspace/.dockpack-static-build.json", JSON.stringify({ output, base: config.base }));
 `;
 
-async function buildStaticFrontend(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, nodeImage: string, frontend: StaticFrontend): Promise<void> {
-  if (!docker.hasImage(STATIC_FRONTEND_IMAGE) || docker.imagePlatform(STATIC_FRONTEND_IMAGE) !== TARGET) {
-    throw new DockpackError(`Static frontend production builds need ${STATIC_FRONTEND_IMAGE} for ${TARGET}. Recreate the development bundle with the updated CLI on a connected machine, transfer it, and run 'dockpack build prod' again.`);
+async function buildStaticFrontend(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, nodeImage: string, frontend: StaticFrontend, targetPlatform: string): Promise<void> {
+  if (!docker.hasImage(STATIC_FRONTEND_IMAGE) || docker.imagePlatform(STATIC_FRONTEND_IMAGE) !== targetPlatform) {
+    throw new DockpackError(`Static frontend production builds need ${STATIC_FRONTEND_IMAGE} for ${targetPlatform}. Recreate the development bundle with the updated CLI on a connected machine, transfer it, and run 'dockpack build prod' again.`);
   }
   const context = await mkdtemp(path.join(stage, "frontend-build-"));
   const workspace = path.join(context, "workspace");
@@ -133,7 +131,7 @@ async function buildStaticFrontend(root: string, stage: string, image: string, c
       'COPY ["default.conf", "/etc/nginx/conf.d/default.conf"]',
       "EXPOSE 80", "",
     ].join("\n"), "utf8");
-    await productionStep("Building Nginx production image", () => docker.run(["buildx", "build", "--pull=false", "--network=none", "--platform", TARGET, "--load", "--tag", image, runtime], { streamOutput: true }));
+    await productionStep("Building Nginx production image", () => docker.run(["buildx", "build", "--pull=false", "--network=none", "--platform", targetPlatform, "--load", "--tag", image, runtime], { streamOutput: true }));
   } finally {
     try { dockerWorkspace?.cleanup(); }
     finally { await rm(context, { recursive: true, force: true }); }
@@ -153,6 +151,7 @@ function lockFile(detection: { ecosystem: string; lockFiles: string[]; dependenc
 
 async function buildGeneratedApplication(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, config: Awaited<ReturnType<typeof readConfig>>): Promise<boolean> {
   if (docker.platform().os !== "linux") throw new DockpackError("Production image creation requires a Docker daemon capable of building Linux containers.");
+  const targetPlatform = config.target.production_platform;
   const detections = await detectProject(root);
   if (detections.length !== 1) throw new DockpackError("Automatic production Dockerfile generation currently supports one application runtime per project.");
   const detection = detections[0]!;
@@ -163,11 +162,11 @@ async function buildGeneratedApplication(root: string, stage: string, image: str
   const baseImage = await runtimeImage(detection, root, config.runtime);
   if (!docker.hasImage(baseImage)) throw new DockpackError(`Required base image ${baseImage} is not present locally. Prepare it in the development bundle before going offline.`);
   if (frontend) {
-    await buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend);
+    await buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend, targetPlatform);
     return true;
   }
   const basePlatform = docker.imagePlatform(baseImage);
-  if (basePlatform !== TARGET) throw new DockpackError(`Base image ${baseImage} is ${basePlatform}; production build needs ${TARGET}.`);
+  if (basePlatform !== targetPlatform) throw new DockpackError(`Base image ${baseImage} is ${basePlatform}; production build needs ${targetPlatform}.`);
   const context = path.join(stage, "build-context");
   await mkdir(context, { recursive: true });
   try {
@@ -184,7 +183,7 @@ async function buildGeneratedApplication(root: string, stage: string, image: str
     await writeFile(dockerfile, dockerfileFor(detection.ecosystem, baseImage, file, command, hasBuildScript), "utf8");
     await writeFile(path.join(context, ".dockerignore"), "Dockerfile.dockpack\n", "utf8");
     await productionStep("Building application production image", () => docker.run([
-      "buildx", "build", "--pull=false", "--platform", TARGET, "--load", "--tag", image,
+      "buildx", "build", "--pull=false", "--platform", targetPlatform, "--load", "--tag", image,
       "--file", dockerfile, "--build-context", `dockpack-cache=${cacheDir}`, context,
     ], { streamOutput: true }));
   } finally {
@@ -233,22 +232,22 @@ async function validateOfflineBuild(serviceName: string, root: string, buildValu
   }
 }
 
-async function runProjectBuildCommand(root: string, workspace: string, cacheDir: string, docker: DockerRunner, ecosystem: string, buildCommand: string[], runtime: RuntimeVersions): Promise<void> {
+async function runProjectBuildCommand(root: string, workspace: string, cacheDir: string, docker: DockerRunner, ecosystem: string, buildCommand: string[], runtime: RuntimeVersions, targetPlatform: string): Promise<void> {
   if (buildCommand.length === 0) throw new DockpackError("Set application.build_command in .dockpack.yaml to build the project before its existing Dockerfile is packaged.");
   const detection = (await detectProject(root)).find((item) => item.ecosystem === ecosystem);
   if (!detection) throw new DockpackError(`Cannot detect the ${ecosystem} runtime needed by application.build_command.`);
   const image = await runtimeImage(detection, root, runtime);
-  if (!docker.hasImage(image) || docker.imagePlatform(image) !== TARGET) throw new DockpackError(`The build command needs a local ${TARGET} runtime image: ${image}. Recreate the development bundle.`);
+  if (!docker.hasImage(image) || docker.imagePlatform(image) !== targetPlatform) throw new DockpackError(`The build command needs a local ${targetPlatform} runtime image: ${image}. Recreate the development bundle.`);
   const frontend = ecosystem === "node" ? await detectStaticFrontend(root, [], buildCommand) : undefined;
   await prepareContext(root, workspace, frontend?.mode);
   if ([workspace, cacheDir].some((value) => value.includes(","))) throw new DockpackError("Docker bind mount paths containing commas are not supported.");
   const run = (command: string[]) => docker.run([
-    "run", "--rm", "--pull", "never", "--network", "none", "--platform", TARGET,
+    "run", "--rm", "--pull", "never", "--network", "none", "--platform", targetPlatform,
     "--mount", `type=bind,source=${workspace},target=/workspace`,
     "--mount", `type=bind,source=${cacheDir},target=/dockpack-cache,readonly`,
     "--workdir", "/workspace", image, ...command,
   ], { streamOutput: true });
-  logger.info(`[dockpack] Running application.build_command in an isolated ${TARGET} container (network disabled)...`);
+  logger.info(`[dockpack] Running application.build_command in an isolated ${targetPlatform} container (network disabled)...`);
   if (ecosystem === "node") {
     await productionStep("Installing application dependencies offline", () => run(["node", "-e", checkedNpmInstall, "--", "--offline", "--cache", "/dockpack-cache/npm", "--include=dev", "--include=optional"]));
     await productionStep("Running application build command", () => run(buildCommand));
@@ -317,7 +316,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
   const totalStarted = Date.now();
   const root = path.resolve(projectDir);
   const config = await readConfig(path.join(root, ".dockpack.yaml"));
-  if (config.target.production_platform !== TARGET) throw new DockpackError(`Only ${TARGET} production bundles are supported in this release.`);
+  const targetPlatform = config.target.production_platform;
   const docker = new DockerRunner();
   if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required to build production bundles.");
   const daemon = docker.platform();
@@ -332,8 +331,8 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
   const stage = path.join(workDir, "payload");
   try {
     await mkdir(stage);
-    const bundleRoot = await prepareProductionResources(root, bundlePath, path.join(workDir, "resources"), docker, TARGET);
-    logger.info(`[dockpack] Production target platform: ${TARGET}`);
+    const bundleRoot = await prepareProductionResources(root, bundlePath, path.join(workDir, "resources"), docker, targetPlatform);
+    logger.info(`[dockpack] Production target platform: ${targetPlatform}`);
     logger.info(`[dockpack] Production bundle output: ${output}`);
 
     const composeAnalysis = await analyzeCompose(root, config.compose.files);
@@ -353,11 +352,11 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
       const hostPort = config.application.port ?? (staticFrontend ? 80 : null);
       const portMap = hostPort ? [`${hostPort}:${staticFrontend ? 80 : hostPort}`] : [];
       const composeModel = { services: { [appService]: { image: generatedImage, ports: portMap } } };
-      const images = await productionStep("Exporting production images", () => exportProductionImages(composeModel, docker, stage, TARGET));
+      const images = await productionStep("Exporting production images", () => exportProductionImages(composeModel, docker, stage, targetPlatform));
       await writeFile(normalizedPath, stringify(composeModel), "utf8");
       const manifest = makeManifest({
         bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
-        target_platform: TARGET, images, dependencies: {}, services: [appService],
+        target_platform: targetPlatform, images, dependencies: {}, services: [appService],
         required_config: [...requiredConfig], persistent_volumes: [], findings,
       });
       await productionStep("Writing production bundle archive", () => createArchive(stage, output, manifest));
@@ -390,15 +389,15 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
         const ecosystem = config.project.ecosystems[0];
         if (!ecosystem) throw new DockpackError("No project runtime is configured for application.build_command.");
         const workspace = path.join(workDir, "application-workspace");
-        await runProjectBuildCommand(root, workspace, path.join(bundleRoot, "cache"), docker, ecosystem, config.application.build_command, config.runtime);
+        await runProjectBuildCommand(root, workspace, path.join(bundleRoot, "cache"), docker, ecosystem, config.application.build_command, config.runtime, targetPlatform);
         await validateOfflineBuild(appService, workspace, { context: ".", dockerfile: "Dockerfile" });
         const image = String(services[appService]?.image || generatedImage);
         overrideServices[appService] = { image, build: { context: workspace, dockerfile: "Dockerfile", network: "none" } };
-        if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
+        if (command.prefix[0] === "docker") overrideServices[appService].platform = targetPlatform;
       } else {
         const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
         overrideServices[appService] = { image: generatedImage, build: null };
-        if (command.prefix[0] === "docker") overrideServices[appService].platform = TARGET;
+        if (command.prefix[0] === "docker") overrideServices[appService].platform = targetPlatform;
         if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${staticFrontend ? 80 : config.application.port}`];
         else if (staticFrontend && (!Array.isArray(services[appService]?.ports) || services[appService]?.ports.length === 0)) overrideServices[appService].ports = ["80:80"];
       }
@@ -408,7 +407,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
       if (config.compose.exclude_services.includes(name)) continue;
       if (name === appService && appNeedsGenerated) continue;
       const override: Record<string, unknown> = {};
-      if (command.prefix[0] === "docker") override.platform = TARGET;
+      if (command.prefix[0] === "docker") override.platform = targetPlatform;
       if (service.build) {
         if (name !== appService || !appNeedsGenerated) await validateOfflineBuild(name, root, service.build);
         const build = typeof service.build === "object" ? service.build as Record<string, unknown> : {};
@@ -423,7 +422,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
         }
         if (!docker.hasImage(service.image)) throw new DockpackError(`Image ${service.image} for service '${name}' is not present locally. The production builder does not pull images.`);
         const platform = docker.imagePlatform(service.image);
-        if (platform !== TARGET) throw new DockpackError(`Image ${service.image} for '${name}' is ${platform}; ${TARGET} is required.`);
+        if (platform !== targetPlatform) throw new DockpackError(`Image ${service.image} for '${name}' is ${platform}; ${targetPlatform} is required.`);
       }
       if (service.network_mode === "host") findings.push(`Service '${name}' uses host networking and may not be portable.`);
       if (Array.isArray(service.devices) && service.devices.length) findings.push(`Service '${name}' maps host devices and needs target-specific configuration.`);
@@ -476,7 +475,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     // Apply protection to the final resolved model, after all build overrides.
     protectProductionEnvironment(deploymentModel, requiredConfig, findings);
     makePortableBindMounts(deploymentModel, root, findings);
-    const images = await productionStep("Exporting production images", () => exportProductionImages(deploymentModel, docker, stage, TARGET));
+    const images = await productionStep("Exporting production images", () => exportProductionImages(deploymentModel, docker, stage, targetPlatform));
     await writeFile(normalizedPath, stringify(deploymentModel), "utf8");
 
     for (const finding of findings) logger.warn(`dockpack: warning: ${finding}`);
@@ -488,7 +487,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     await writeFile(path.join(composeDir, "README.md"), [
       `# ${config.project.name} production bundle`,
       "",
-      `Target platform: ${TARGET}`,
+      `Target platform: ${targetPlatform}`,
       "",
       "Import bundled images and start the Compose stack with Dockpack. Provide values listed in .env.example on the target host.",
       "Database data is stored in Docker volumes and is not included in this bundle.",
@@ -497,7 +496,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     ].join("\n"), "utf8");
     const manifest = makeManifest({
       bundle_kind: "prod", dockpack_version: VERSION, project_name: config.project.name,
-      target_platform: TARGET, images, dependencies: {},
+      target_platform: targetPlatform, images, dependencies: {},
       services: Object.keys(deploymentModel.services),
       findings, required_config: [...requiredConfig], persistent_volumes: [...persistentVolumes],
     });

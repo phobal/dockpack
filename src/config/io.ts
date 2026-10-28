@@ -24,7 +24,7 @@ const CONFIG_COMMENTS: Record<string, string> = {
   "application.dev_port": "开发容器与主机映射同号端口；须与程序监听端口一致，null 表示不显式映射。",
   target: "这里设置 Docker 容器架构，不是 CLI 离线运行包的主机平台。",
   "target.dev_platform": "auto 跟随打包机器的 Docker daemon。向 x64 Linux 交付时在联网打包前改为 linux/amd64；也支持 linux/arm64。修改后须重新打包。",
-  "target.production_platform": "生产包当前仅支持 linux/amd64。",
+  "target.production_platform": "生产包支持 linux/amd64 和 linux/arm64；默认 linux/amd64。普通应用的开发资源包须与生产目标架构一致。",
   compose: "没有 Compose 时保留空列表；服务名必须与 Compose 文件一致。",
   "compose.files": "相对于项目根目录的 Compose 文件，按顺序合并；空列表表示不加载 Compose，不会重新自动发现。",
   "compose.profiles": "启用的 Compose profiles，需要 Docker Compose v2。",

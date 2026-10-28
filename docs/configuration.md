@@ -122,7 +122,7 @@ requires-python = ">=3.12"
 | 字段 | 可选值 | 默认值 | 作用与注意事项 |
 | --- | --- | --- | --- |
 | `target.dev_platform` | `auto`、`linux/amd64`、`linux/arm64` | `auto` | `pack dev` 的镜像和依赖收集平台。`auto` 使用打包机器 Docker daemon 的平台，不会自动识别另一台离线服务器。修改后需重新打包，并在离线端重新 `dev init`。 |
-| `target.production_platform` | 当前仅支持 `linux/amd64` | `linux/amd64` | 生产构建平台，同时用于准备根目录 Dockerfile 的生产基础镜像。虽然配置解析接受字符串，生产构建会拒绝其他值。 |
+| `target.production_platform` | `linux/amd64`、`linux/arm64` | `linux/amd64` | 生产构建平台，同时用于准备根目录 Dockerfile 的生产基础镜像。普通应用的开发资源包须与生产目标架构一致；修改后需重新联网打包。 |
 
 跨架构打包要求联网机器的 Docker 能运行目标架构容器。离线端会检查配置、开发包和 Docker daemon 的平台是否匹配。
 

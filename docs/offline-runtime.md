@@ -63,7 +63,7 @@ Expand-Archive .\dockpack-cli-0.5.0-win32-x64.zip -DestinationPath .\tools
 - Windows x64：Windows 10 / Server 2016 或以上。
 - macOS：13.5 或以上。
 
-macOS 包目前没有额外的应用签名或公证，需按企业可执行文件分发策略部署。生产卷备份和恢复仅支持本地 Linux Docker 主机。ARM64 CLI 运行包不代表支持 ARM64 生产包；生产包目前仅支持 `linux/amd64`。
+macOS 包目前没有额外的应用签名或公证，需按企业可执行文件分发策略部署。生产卷备份和恢复仅支持本地 Linux Docker 主机。生产包支持 `linux/amd64` 和 `linux/arm64`，由 `target.production_platform` 指定；CLI 主机平台与生产容器平台分别选择。
 
 ## 维护者：从源码构建
 

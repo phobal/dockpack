@@ -161,7 +161,7 @@ export async function logsProduction(bundlePath: string, service?: string): Prom
 }
 
 async function parseVolumes(deployment: Deployment): Promise<Array<{ source: string; mountpoint: string }>> {
-  if (process.platform !== "linux") throw new DockpackError("Volume backup/restore requires a local Linux Docker host; the production bundle itself targets Linux amd64.");
+  if (process.platform !== "linux") throw new DockpackError("Volume backup/restore requires a local Linux Docker host matching the production bundle platform.");
   const model = parse(await readFile(deployment.composeFile, "utf8")) as {
     services?: Record<string, { volumes?: Array<string | { type?: string; source?: string }> }>;
     volumes?: Record<string, { name?: string; external?: boolean }>;

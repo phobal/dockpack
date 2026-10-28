@@ -6,7 +6,15 @@
 
 先按 README 配置项目并执行 `dockpack pack dev`。除开发依赖外，生产 Dockerfile 所需的基础镜像、系统库和其他构建资源也必须提前准备。
 
-目前生产目标只支持 `linux/amd64`。如果计划用开发包中的运行时镜像构建生产镜像，开发阶段也使用 `dev_platform: linux/amd64`，避免只准备了 ARM64 镜像。
+生产目标支持 `linux/amd64` 和 `linux/arm64`，通过 `target.production_platform` 选择，默认仍为 `linux/amd64`。普通应用的 `target.dev_platform` 须与生产目标一致，确保运行时镜像和依赖缓存匹配。例如向 ARM64 Linux 服务器交付：
+
+```yaml
+target:
+  dev_platform: linux/arm64
+  production_platform: linux/arm64
+```
+
+修改架构后需重新在联网环境执行 `dockpack pack dev`。构建机器可以使用其他架构，但 Docker 必须具备运行和构建目标架构容器的能力。静态前端可在已有资源支持的构建架构编译，最终 Nginx 镜像按生产目标架构生成。
 
 `pack dev` 会收集项目根目录 Dockerfile 引用的生产基础镜像；默认复用本地匹配架构的镜像，缺失时拉取。使用 `--pull always` 强制更新，`--pull never` 禁止镜像拉取。其他 Dockerfile 的基础镜像和额外镜像引用需要另行准备。若开发与生产平台不同且复用同一镜像标签，打包会保留开发平台镜像并输出提示，生产平台基础镜像需要另外准备。
 
@@ -16,16 +24,15 @@
 
 ```sh
 cd my-project
-dockpack dev init
 dockpack build prod -o ./my-project-prod.tar.gz
 dockpack prod inspect ./my-project-prod.tar.gz
 ```
 
-生产构建依赖本机已导入的开发包状态。构建机器需要可构建 Linux 容器的 Docker daemon，不能靠生产构建过程临时下载缺失资源。
+生产构建会自动校验、解包并导入开发资源包，无需先执行 `dev init`；也可用 `build prod --bundle <path>` 指定资源包。构建机器需要可构建 Linux 容器的 Docker daemon，不能靠生产构建过程临时下载缺失资源。
 
 ### 使用已有 Compose / Dockerfile
 
-生产打包解析 `compose.files` 和 `compose.profiles`，纳入未被 `compose.exclude_services` 排除的服务。带 `build` 的服务在禁用构建网络的情况下构建为 `linux/amd64`；没有 `build` 的服务镜像必须已在本机且平台匹配，生产构建不会拉取镜像。
+生产打包解析 `compose.files` 和 `compose.profiles`，纳入未被 `compose.exclude_services` 排除的服务。带 `build` 的服务在禁用构建网络的情况下构建为配置的 `target.production_platform`；没有 `build` 的服务镜像必须已在本机且平台匹配，生产构建不会拉取镜像。
 
 根据项目的生产启动方式配置 Compose 和 Dockerfile。`application.build_command` 与 `application.command` 的生效场景见[配置指南](./configuration.md)。Dockerfile 中的安装操作需要能从本地准备的资源完成，远程 `ADD`、需要在线下载的构建前端等也需要处理。
 
@@ -37,7 +44,7 @@ dockpack prod inspect ./my-project-prod.tar.gz
 
 ## 3. 在离线部署机器启动
 
-将生产包和该主机适用的 dockpack CLI 运行包传给 Linux amd64 Docker 主机，然后执行：
+将生产包和该主机适用的 dockpack CLI 运行包传给与包内目标架构一致的 Linux Docker 主机，然后执行：
 
 ```sh
 dockpack deploy import ./my-project-prod.tar.gz
