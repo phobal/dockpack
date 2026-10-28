@@ -16,9 +16,9 @@ dockpack 帮你在**有网的电脑上准备依赖和 Docker 镜像**，再带�
 目前支持的项目依赖：
 
 - **Node.js 项目**：项目根目录有 `package.json` 和 `package-lock.json`，使用 npm。
-- **Python 项目**：项目根目录有 `requirements.txt`；缺少时使用 `requirements-dev.txt`，不会自动合并两者，使用 pip。
+- **Python 项目**：支持根目录的 `pyproject.toml` + `uv.lock`，以及 pip 的 `requirements.txt`（缺少时使用 `requirements-dev.txt`，不会自动合并两者）。存在 `uv.lock` 时以锁文件为准，联网打包会导出锁定依赖并收集离线 wheel。
 
-Node.js 版本可在 `.dockpack.yaml` 的 `runtime.node_version` 中指定（如 `"22"`），或通过 `.nvmrc`、`package.json` 的 `engines.node` 等项目声明推断；未指定时默认使用 Node.js 22，并在打包时提示设置方法。Python 同样支持 `.dockpack.yaml` 的 `runtime.python_version`（如 `"3.12"`），或从 `.python-version`、`pyproject.toml` 的 `requires-python` 推断；未指定时默认使用 Python 3.12 并提示设置方法。Python 配置版本必须加引号。目前不支持通过修改配置启用 pnpm、Yarn、Poetry 或 uv。
+Node.js 版本可在 `.dockpack.yaml` 的 `runtime.node_version` 中指定（如 `"22"`），或通过 `.nvmrc`、`package.json` 的 `engines.node` 等项目声明推断；未指定时默认使用 Node.js 22，并在打包时提示设置方法。Python 同样支持 `.dockpack.yaml` 的 `runtime.python_version`（如 `"3.12"`），或从 `.python-version`、`pyproject.toml` 的 `requires-python` 推断；未指定时默认使用 Python 3.12 并提示设置方法。Python 配置版本必须加引号。目前不支持通过修改配置启用 pnpm、Yarn 或 Poetry。uv 的使用要求见[配置指南](./docs/configuration.md#uv-项目的离线依赖)。
 
 ## 2. 在联网电脑上安装 dockpack
 

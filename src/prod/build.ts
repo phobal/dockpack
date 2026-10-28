@@ -1,5 +1,5 @@
 import { logger } from "../logger.js";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { VERSION } from "../version.js";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -15,6 +15,7 @@ import { DockpackError } from "../errors.js";
 import { detectProject } from "../project/detect.js";
 import { exportProductionImages } from "./images.js";
 import { checkedNpmInstall, runtimeImage, type RuntimeVersions } from "../dev/dependencies.js";
+import { pythonRequirementsPath, UV_REQUIREMENTS } from "../dev/python.js";
 import { detectStaticFrontend, STATIC_FRONTEND_IMAGE, type StaticFrontend } from "../project/frontend.js";
 import { defaultDevelopmentBundlePath } from "../dev/bundle-path.js";
 import { defaultProductionBundlePath, prepareProductionResources } from "./resources.js";
@@ -141,6 +142,7 @@ async function buildStaticFrontend(root: string, stage: string, image: string, c
 
 function lockFile(detection: { ecosystem: string; lockFiles: string[]; dependencyFiles: string[] }): string {
   if (detection.ecosystem === "python") {
+    if (detection.lockFiles.includes("uv.lock")) return UV_REQUIREMENTS;
     const candidate = ["requirements.txt", "requirements-dev.txt"].find((name) => detection.dependencyFiles.includes(name));
     if (!candidate) throw new DockpackError("Generated Python production images currently require requirements.txt.");
     return candidate;
@@ -170,6 +172,9 @@ async function buildGeneratedApplication(root: string, stage: string, image: str
   await mkdir(context, { recursive: true });
   try {
     await prepareContext(root, context);
+    if (detection.ecosystem === "python" && detection.lockFiles.includes("uv.lock")) {
+      await copyFile(pythonRequirementsPath(root, cacheDir), path.join(context, UV_REQUIREMENTS));
+    }
     const dockerfile = path.join(context, "Dockerfile.dockpack");
     let hasBuildScript = false;
     if (detection.ecosystem === "node") {
@@ -248,8 +253,8 @@ async function runProjectBuildCommand(root: string, workspace: string, cacheDir:
     await productionStep("Installing application dependencies offline", () => run(["node", "-e", checkedNpmInstall, "--", "--offline", "--cache", "/dockpack-cache/npm", "--include=dev", "--include=optional"]));
     await productionStep("Running application build command", () => run(buildCommand));
   } else if (ecosystem === "python") {
-    const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(workspace, name)));
-    if (!requirements) throw new DockpackError("Python production build commands require a requirements file.");
+    const requirements = pythonRequirementsPath(root, cacheDir);
+    const containerRequirements = `${path.dirname(requirements) === root ? "/workspace" : "/dockpack-cache"}/${path.basename(requirements)}`;
     await productionStep("Installing Python dependencies and building application offline", () => run(["python", "-c", [
       "import json, os, subprocess, sys, venv",
       "venv.create('/tmp/dockpack-build-venv', with_pip=True)",
@@ -257,7 +262,7 @@ async function runProjectBuildCommand(root: string, workspace: string, cacheDir:
       "env = dict(os.environ, VIRTUAL_ENV='/tmp/dockpack-build-venv')",
       "env['PATH'] = '/tmp/dockpack-build-venv/bin:' + env.get('PATH', '')",
       "subprocess.run(json.loads(sys.argv[1]), env=env, check=True)",
-    ].join("\n"), JSON.stringify(buildCommand), requirements]));
+    ].join("\n"), JSON.stringify(buildCommand), containerRequirements]));
   } else throw new DockpackError(`Unsupported build command runtime: ${ecosystem}.`);
 }
 

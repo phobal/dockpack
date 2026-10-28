@@ -5,6 +5,7 @@ import path from "node:path";
 import { extractArchive } from "../bundles/archive.js";
 import { parseBundleManifest } from "../bundles/manifest.js";
 import { sha256Files } from "../dev/dependencies.js";
+import { pythonDependencyFiles, pythonRequirementsPath } from "../dev/python.js";
 import { DockerRunner } from "../docker/runner.js";
 import { DockpackError } from "../errors.js";
 import { detectProject } from "../project/detect.js";
@@ -34,9 +35,8 @@ export async function prepareProductionResources(projectDir: string, bundlePath:
     let files: string[];
     if (ecosystem === "node") files = ["package-lock.json"];
     else if (ecosystem === "python") {
-      const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(projectDir, name)));
-      if (!requirements) throw new DockpackError("Production resources require the Python requirements file used when creating the development bundle.");
-      files = [requirements];
+      files = pythonDependencyFiles(projectDir);
+      pythonRequirementsPath(projectDir, path.join(root, "cache"));
     } else throw new DockpackError(`Unsupported production dependency ecosystem: ${ecosystem}.`);
     let actual: string;
     try {

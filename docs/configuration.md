@@ -152,9 +152,30 @@ CLI 离线运行包中的 `darwin-arm64`、`linux-x64` 等名称表示 CLI 主�
 | --- | --- | --- | --- |
 | `dependencies.policy` | 字符串 `locked` | `locked` | 当前仅允许这一种策略。实际版本是否固定取决于依赖文件；它不会自动锁定未固定版本的 Python requirements。 |
 | `dependencies.node_files` | 字符串数组 | `[]` | 初始化生成的检测记录。当前不会根据此列表改换收集路径，实际使用根目录 `package.json` 和 `package-lock.json`。 |
-| `dependencies.python_files` | 字符串数组 | `[]` | 初始化生成的检测记录。当前不会根据此列表改换收集路径，优先使用根目录 `requirements.txt`；缺少时使用 `requirements-dev.txt`，不会自动合并二者。 |
+| `dependencies.python_files` | 字符串数组 | `[]` | 初始化生成的检测记录，不用于自定义收集路径。存在 `uv.lock` 时使用根目录 `pyproject.toml` + `uv.lock`（以及可选 `uv.toml`），否则使用 `requirements.txt`，缺少时使用 `requirements-dev.txt`；不合并二者。 |
 
-当前开发包支持 npm 和 pip。修改文件列表无法启用 pnpm、Yarn、Poetry 或 uv，也不会指定其他位置的依赖文件。
+当前开发包支持 npm、pip 和 uv.lock。修改文件列表无法启用 pnpm、Yarn 或 Poetry，也不会指定其他位置的依赖文件。
+
+### uv 项目的离线依赖
+
+项目根目录需要同时包含 `pyproject.toml` 和已生成且最新的 `uv.lock`。无需手动生成 requirements 文件，也不要求主机预装 uv：
+
+```sh
+# 在联网机器准备锁文件（已有最新锁文件时可跳过）
+uv lock
+# 初始化配置并打包
+dockpack init
+dockpack pack dev
+```
+
+打包会在目标平台的 Python 容器中临时安装固定版本 uv，以 `uv export --locked --no-emit-project` 导出依赖（包含默认开发依赖组），不更新源项目的锁文件。然后用 pip 下载锁文件哈希对应的 wheel，并在禁用网络的新容器中验证可安装性。缺少目标平台/Python 版本对应 wheel 的纯源码依赖会明确报错，避免交付后才发现无法安装。
+
+离线包中的 `cache/python-requirements.txt` 保存固定版本和哈希，`cache/python/` 保存 wheel。`dev init`、`dev rebuild` 和自动 Python 生产构建使用这些内容进行 pip 离线安装，离线端不需要安装 uv。控制应用时使用 `python`、`python -m uvicorn` 等命令；此流程不提供 `uv run` 命令，也不安装根项目自身。源码会照常挂载到开发容器。
+
+`pyproject.toml`、`uv.lock` 和可选的 `uv.toml` 都参与依赖一致性校验，须随源码一起传输。任何文件变化后，都需要在联网机器重新打包。存在 `uv.lock` 时，即使目录中还有旧 `requirements.txt`，也会以 uv 锁文件为准，并在初始化检测结果中提示。Poetry/Pipenv 与 uv 的多锁文件冲突仍需先解决。
+
+当前 uv 支持独立项目的 registry 依赖；不支持 uv workspace、Git/直接 URL/本地路径依赖，也不支持离线编译仅提供源码的第三方包。锁文件与项目声明不一致时，请在联网机器执行 `uv lock` 后重试，不会自动回退到 requirements 文件或重新解析未锁定版本。可选 extras 和非默认依赖组不会被自动全部启用。
+
 
 ## 常见场景
 

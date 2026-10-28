@@ -12,6 +12,7 @@ import { DockerRunner } from "../docker/runner.js";
 import { runCompose, runComposeAttached, getComposeCommand } from "../compose/command.js";
 import { analyzeCompose } from "../compose/inspect.js";
 import { sha256Files } from "./dependencies.js";
+import { pythonDependencyFiles, pythonRequirementsPath } from "./python.js";
 import { detectProject, inferDevelopmentServer } from "../project/detect.js";
 import { defaultDevelopmentBundlePath } from "./bundle-path.js";
 
@@ -137,13 +138,13 @@ async function withInstallCache<T>(root: string, state: ProjectState, ecosystem:
 async function installOne(root: string, state: ProjectState, ecosystem: string): Promise<void> {
   const service = `dockpack-dev-${ecosystem}`;
   if (ecosystem === "python") {
-    const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => state.dependencies.python && exists(path.join(root, name)));
-    if (!requirements) throw new DockpackError("Python offline installation requires requirements.txt or requirements-dev.txt.");
     await withInstallCache(root, state, ecosystem, async (overlay, cacheDir) => {
+      const requirements = pythonRequirementsPath(root, cacheDir);
+      const containerRequirements = `${path.dirname(requirements) === root ? "/workspace" : "/dockpack-cache"}/${path.basename(requirements)}`;
       await compose(root, state, ["run", "--rm", "--no-deps", service, "python", "-m", "venv", "/opt/dockpack/deps"], { extraFiles: [overlay], cacheDir });
       await compose(root, state, [
         "run", "--rm", "--no-deps", service, "/opt/dockpack/deps/bin/python", "-m", "pip", "install",
-        "--no-index", "--find-links", "/dockpack-cache/python", "-r", `/workspace/${requirements}`,
+        "--no-index", "--find-links", "/dockpack-cache/python", "-r", containerRequirements,
       ], { extraFiles: [overlay], cacheDir });
     });
     return;
@@ -160,9 +161,7 @@ async function installOne(root: string, state: ProjectState, ecosystem: string):
 async function verifyDependencyInputs(root: string, state: ProjectState): Promise<void> {
   const current: Record<string, string> = {};
   if (state.dependencies.python) {
-    const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => state.dependencies.python && exists(path.join(root, name)));
-    if (!requirements) throw new DockpackError("The Python requirements file included in this bundle is missing.");
-    current.python = await sha256Files(root, [requirements]);
+    current.python = await sha256Files(root, pythonDependencyFiles(root));
   }
   if (state.dependencies.node) {
     if (!exists(path.join(root, "package-lock.json"))) throw new DockpackError("package-lock.json included in this bundle is missing.");
@@ -321,9 +320,7 @@ export async function rebuildDev(projectDir: string): Promise<void> {
 async function ensureDependencyInputsMatch(root: string, state: ProjectState): Promise<void> {
   const current: Record<string, string> = {};
   if (state.dependencies.python) {
-    const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => exists(path.join(root, name)));
-    if (!requirements) throw new DockpackError("The Python dependency file from the bundle is missing.");
-    current.python = await sha256Files(root, [requirements]);
+    current.python = await sha256Files(root, pythonDependencyFiles(root));
   }
   if (state.dependencies.node) {
     if (!exists(path.join(root, "package-lock.json"))) throw new DockpackError("package-lock.json from the bundle is missing.");

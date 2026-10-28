@@ -31,11 +31,12 @@ export async function detectPython(projectDir: string): Promise<EcosystemDetecti
 
   const managers = new Set(lockFiles.map((name) => lockMap[name]));
   const hasRequirements = dependencyFiles.includes("requirements.txt") || dependencyFiles.includes("requirements-dev.txt");
-  if (hasRequirements) managers.add("pip");
+  if (hasRequirements && !lockFiles.includes("uv.lock")) managers.add("pip");
   // A project may keep package metadata and an unpinned dependency list in
   // pyproject.toml while using requirements.txt as its actual installer input.
   if (dependencyFiles.includes("pyproject.toml") && lockFiles.length === 0 && !hasRequirements) managers.add("pyproject");
   const findings: string[] = [];
+  if (hasRequirements && lockFiles.includes("uv.lock")) findings.push("uv.lock is authoritative; requirements.txt / requirements-dev.txt are ignored.");
   if (managers.size > 1) findings.push("Multiple Python package manager inputs found; select the authoritative lockfile.");
   if (lockFiles.length === 0) findings.push("No Python lockfile found; dependency resolution may not be reproducible.");
 

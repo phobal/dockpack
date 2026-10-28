@@ -1,5 +1,5 @@
 import { logger } from "../logger.js";
-import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { DockpackError } from "../errors.js";
 import { DockerRunner } from "../docker/runner.js";
 import type { EcosystemDetection } from "../project/detect.js";
 import type { DockpackConfig } from "../config/schema.js";
+import { pythonDependencyFiles, validateUvProject, portableUvRequirements, UV_REQUIREMENTS, UV_EXPORT_SCRIPT, PYTHON_OFFLINE_CHECK } from "./python.js";
 
 export type RuntimeVersions = Partial<DockpackConfig["runtime"]>;
 
@@ -121,10 +122,35 @@ if (result.error || result.status !== 0 || !completed || /^npm\s+(?:error|ERR!)(
 `;
 
 export async function collectPython(projectDir: string, cacheDir: string, image: string, docker: DockerRunner, platform: string): Promise<CollectedDependency> {
-  const requirements = ["requirements.txt", "requirements-dev.txt"].find((name) => existsSync(path.join(projectDir, name)));
-  if (!requirements) throw new DockpackError("Python dependency collection currently requires requirements.txt or requirements-dev.txt.");
+  const files = pythonDependencyFiles(projectDir);
   const wheelhouse = path.join(cacheDir, "python");
   await mkdir(wheelhouse, { recursive: true });
+  if (files.includes("uv.lock")) {
+    validateUvProject(projectDir);
+    const args = ["run", "--rm", "--pull", "never", "--platform", platform,
+      "--mount", `type=bind,source=${mountPath(projectDir)},target=/workspace,readonly`,
+      "--mount", `type=bind,source=${mountPath(cacheDir)},target=/cache`,
+      "--workdir", "/workspace", image];
+    const before = await sha256Files(projectDir, files);
+    try {
+      logger.info("[dockpack] Exporting uv.lock with --locked (including default development groups)...");
+      docker.run([...args, "python", "-c", UV_EXPORT_SCRIPT], { streamOutput: true });
+      const filename = path.join(cacheDir, UV_REQUIREMENTS);
+      const requirements = await readFile(filename, "utf8");
+      const portable = portableUvRequirements(requirements);
+      docker.run([...args, "python", "-m", "pip", "download", "--only-binary=:all:", "--require-hashes", "--dest", "/cache/python", "-r", `/cache/${UV_REQUIREMENTS}`], { streamOutput: true });
+      await writeFile(filename, portable, "utf8");
+      logger.info("[dockpack] Validating uv dependencies with network disabled...");
+      docker.run(["run", "--rm", "--pull", "never", "--network", "none", "--platform", platform,
+        "--mount", `type=bind,source=${mountPath(cacheDir)},target=/cache,readonly`,
+        image, "python", "-c", PYTHON_OFFLINE_CHECK], { streamOutput: true });
+      if (await sha256Files(projectDir, files) !== before) throw new DockpackError("Python dependency inputs changed while packaging; retry with unchanged pyproject.toml and uv.lock.");
+      return { ecosystem: "python", runtimeImage: image, lockDigest: before, lockFiles: files };
+    } catch (error) {
+      throw new DockpackError(`uv dependency collection failed. Run 'uv lock' on a connected machine and retry 'dockpack pack dev'. Dependencies need wheels for ${platform} and ${image}; Git/path dependencies and source-only packages are not supported. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  }
+  const requirements = files[0]!;
   docker.run([
     "run", "--rm", "--platform", platform,
     "--mount", `type=bind,source=${mountPath(projectDir)},target=/workspace,readonly`,

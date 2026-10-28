@@ -79,3 +79,7 @@ dockpack deploy restore ./my-project-prod.tar.gz --backup ./my-project-backup.ta
 ```
 
 外部卷和其他外部服务的数据需单独管理。镜像离线包不等于业务数据备份。
+
+## uv.lock 项目
+
+支持使用 `pyproject.toml` + `uv.lock` 创建开发资源包。生产构建会校验这两个文件及可选 `uv.toml`，自动生成的 Python Dockerfile 和 `application.build_command` 流程使用开发包中已导出的固定依赖及 wheel，通过 pip 离线安装，不会在离线机器重新运行 uv 解析。已有自定义 Dockerfile 的安装步骤仍由项目维护；如其中使用联网 `uv sync`，需自行调整为离线构建。具体依赖范围与限制见[uv 项目的离线依赖](./configuration.md#uv-项目的离线依赖)。

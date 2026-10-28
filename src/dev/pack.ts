@@ -65,8 +65,8 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
     const detections = await detectProject(root);
     if (detections.length === 0) throw new DockpackError("No supported Python or Node.js dependency files were detected.");
     for (const item of detections) {
-      if (item.ecosystem === "python" && item.packageManager !== "pip") {
-        throw new DockpackError(`Python package manager '${item.packageManager ?? "unknown"}' is detected but this build supports pip requirements files only.`);
+      if (item.ecosystem === "python" && item.packageManager !== "pip" && item.packageManager !== "uv") {
+        throw new DockpackError(`Python package manager '${item.packageManager ?? "unknown"}' is detected; supported inputs are pip requirements files or pyproject.toml with uv.lock.`);
       }
       if (item.ecosystem === "node" && item.packageManager !== "npm") {
         throw new DockpackError(`Node.js package manager '${item.packageManager ?? "unknown"}' is detected but this build supports npm package-lock.json only.`);

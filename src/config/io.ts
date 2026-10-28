@@ -33,7 +33,7 @@ const CONFIG_COMMENTS: Record<string, string> = {
   "compose.exclude_services": "开发/生产打包排除的服务；与 include_services 不可重叠。",
   dependencies: "依赖检测记录。当前不能通过以下文件列表自定义依赖收集路径。",
   "dependencies.policy": "当前仅支持 locked，不支持其他策略。",
-  "dependencies.python_files": "检测记录；实际收集根目录 requirements.txt，缺少时使用 requirements-dev.txt，不合并二者。",
+  "dependencies.python_files": "检测记录；优先收集根目录 pyproject.toml + uv.lock（如有 uv.toml 也需一同传输）；否则使用 requirements.txt，缺少时使用 requirements-dev.txt，不合并二者。",
   "dependencies.node_files": "检测记录；实际收集根目录 package.json 与 package-lock.json，当前仅支持 npm。",
 };
 
