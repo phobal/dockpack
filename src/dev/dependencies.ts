@@ -87,12 +87,39 @@ function mountPath(hostPath: string): string {
 // with status 0. Require an actual npm ci completion summary as well as status.
 export const checkedNpmInstall = String.raw`
 const { spawnSync } = require("node:child_process");
-const { readdirSync, readFileSync } = require("node:fs");
+const { constants, cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const logDir = "/tmp/dockpack-npm-logs";
-const result = spawnSync("npm", ["ci", "--json", "--no-audit", "--no-fund",
-  "--update-notifier=false", "--logs-dir=" + logDir, ...process.argv.slice(1)], {
-  encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
-});
+const args = process.argv.slice(1);
+let temporaryCache;
+let result;
+try {
+  if (args.includes("--offline")) {
+    let cacheIndex = -1;
+    let sourceCache;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--cache") { cacheIndex = i; sourceCache = args[++i]; }
+      else if (args[i].startsWith("--cache=")) { cacheIndex = i; sourceCache = args[i].slice(8); }
+    }
+    if (sourceCache) {
+      // npm can update its index even on cache reads; a read-only cache may
+      // misleadingly report ENOTCACHED despite already containing the metadata.
+      temporaryCache = mkdtempSync(path.join(os.tmpdir(), "dockpack-npm-cache-"));
+      cpSync(sourceCache, temporaryCache, { recursive: true, mode: constants.COPYFILE_FICLONE });
+      if (args[cacheIndex] === "--cache") args[cacheIndex + 1] = temporaryCache;
+      else args[cacheIndex] = "--cache=" + temporaryCache;
+    }
+  }
+  result = spawnSync("npm", ["ci", "--json", "--no-audit", "--no-fund",
+    "--update-notifier=false", "--logs-dir=" + logDir, ...args], {
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  });
+} catch (error) {
+  result = { error, status: 1 };
+} finally {
+  if (temporaryCache) rmSync(temporaryCache, { recursive: true, force: true });
+}
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 let completed = false;

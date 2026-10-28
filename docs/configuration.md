@@ -156,6 +156,12 @@ CLI 离线运行包中的 `darwin-arm64`、`linux-x64` 等名称表示 CLI 主�
 
 当前开发包支持 npm、pip 和 uv.lock。修改文件列表无法启用 pnpm、Yarn 或 Poetry，也不会指定其他位置的依赖文件。
 
+### npm 项目的离线缓存
+
+`pack dev` 先在联网容器中收集依赖，再在禁用网络的新容器中执行 `npm ci --offline` 验证。npm 即使在离线模式下也可能更新缓存索引，直接使用只读缓存可能误报 `ENOTCACHED`。因此，离线校验、`dev init` / `dev rebuild` 和前端构建会将缓存复制到容器的临时可写目录，安装结束后清理，包内的原始缓存保持只读。
+
+此流程沿用 npm 的 peer dependency 检查，不会自动添加 `--force` 或 `--legacy-peer-deps`。如果缓存确实缺少包，或 `npm ci` 报出无法解决的依赖冲突，打包仍会失败，并保留 npm 的原始诊断。
+
 ### uv 项目的离线依赖
 
 项目根目录需要同时包含 `pyproject.toml` 和已生成且最新的 `uv.lock`。无需手动生成 requirements 文件，也不要求主机预装 uv：

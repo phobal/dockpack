@@ -11,7 +11,7 @@ import { DockpackError } from "../errors.js";
 import { DockerRunner } from "../docker/runner.js";
 import { runCompose, runComposeAttached, getComposeCommand } from "../compose/command.js";
 import { analyzeCompose } from "../compose/inspect.js";
-import { sha256Files } from "./dependencies.js";
+import { checkedNpmInstall, sha256Files } from "./dependencies.js";
 import { pythonDependencyFiles, pythonRequirementsPath } from "./python.js";
 import { detectProject, inferDevelopmentServer } from "../project/detect.js";
 import { defaultDevelopmentBundlePath } from "./bundle-path.js";
@@ -151,7 +151,7 @@ async function installOne(root: string, state: ProjectState, ecosystem: string):
   }
   if (ecosystem === "node") {
     await withInstallCache(root, state, ecosystem, async (overlay, cacheDir) => {
-      await compose(root, state, ["run", "--rm", "--no-deps", service, "npm", "ci", "--offline", "--cache", "/dockpack-cache/npm"], { extraFiles: [overlay], cacheDir });
+      await compose(root, state, ["run", "--rm", "--no-deps", service, "node", "-e", checkedNpmInstall, "--", "--offline", "--cache", "/dockpack-cache/npm"], { extraFiles: [overlay], cacheDir });
     });
     return;
   }
