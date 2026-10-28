@@ -21,6 +21,7 @@ import { defaultDevelopmentBundlePath } from "../dev/bundle-path.js";
 import { defaultProductionBundlePath, prepareProductionResources } from "./resources.js";
 import { createFrontendWorkspace } from "./frontend-workspace.js";
 import { productionStep } from "./progress.js";
+import { nginxTemplate, backendEnvironmentScript, backendEnvironment, BACKEND_URL_VARIABLE } from "./frontend-nginx.js";
 
 function appImageName(projectName: string, service: string): string {
   const clean = `${projectName}-${service}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -117,18 +118,14 @@ async function buildStaticFrontend(root: string, stage: string, image: string, c
     const site = path.join(runtime, "site", ...base.split("/").filter(Boolean));
     await mkdir(site, { recursive: true });
     await productionStep("Exporting static frontend assets", () => active.copyOutput(relative, site));
-    const locations = [
-      ...(base === "/" ? [] : ["    location / { return 404; }", `    location = ${base.slice(0, -1)} { return 302 ${base}; }`]),
-      `    location ${base} { try_files $uri $uri/ ${base}index.html; }`,
-      "    location ~* \\.(?:js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|wasm)$ { try_files $uri =404; }",
-    ];
-    await writeFile(path.join(runtime, "default.conf"), [
-      "server {", "    listen 80;", "    server_name _;", "    root /usr/share/nginx/html;", "    index index.html;", ...locations, "}", "",
-    ].join("\n"), "utf8");
+    await writeFile(path.join(runtime, "default.conf.template"), nginxTemplate(base), "utf8");
+    await writeFile(path.join(runtime, "19-dockpack-backend.envsh"), backendEnvironmentScript, "utf8");
     await writeFile(path.join(runtime, "Dockerfile"), [
       `FROM ${STATIC_FRONTEND_IMAGE}`,
       'COPY ["site/", "/usr/share/nginx/html/"]',
-      'COPY ["default.conf", "/etc/nginx/conf.d/default.conf"]',
+      'COPY ["default.conf.template", "/etc/nginx/templates/default.conf.template"]',
+      'COPY ["19-dockpack-backend.envsh", "/docker-entrypoint.d/19-dockpack-backend.envsh"]',
+      "RUN chmod +x /docker-entrypoint.d/19-dockpack-backend.envsh",
       "EXPOSE 80", "",
     ].join("\n"), "utf8");
     await productionStep("Building Nginx production image", () => docker.run(["buildx", "build", "--pull=false", "--network=none", "--platform", targetPlatform, "--load", "--tag", image, runtime], { streamOutput: true }));
@@ -351,7 +348,15 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
       const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
       const hostPort = config.application.port ?? (staticFrontend ? 80 : null);
       const portMap = hostPort ? [`${hostPort}:${staticFrontend ? 80 : hostPort}`] : [];
-      const composeModel = { services: { [appService]: { image: generatedImage, ports: portMap } } };
+      const composeModel = { services: { [appService]: {
+        image: generatedImage, ports: portMap,
+        ...(staticFrontend ? { environment: backendEnvironment } : {}),
+      } } };
+      if (staticFrontend) {
+        requiredConfig.add(BACKEND_URL_VARIABLE);
+        await writeFile(path.join(stage, ".env.example"), "BACKEND_URL=\n", "utf8");
+        await writeFile(path.join(composeDir, ".env.example"), "BACKEND_URL=\n", "utf8");
+      }
       const images = await productionStep("Exporting production images", () => exportProductionImages(composeModel, docker, stage, targetPlatform));
       await writeFile(normalizedPath, stringify(composeModel), "utf8");
       const manifest = makeManifest({
@@ -397,6 +402,10 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
       } else {
         const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
         overrideServices[appService] = { image: generatedImage, build: null };
+        if (staticFrontend) {
+          overrideServices[appService].environment = backendEnvironment;
+          requiredConfig.add(BACKEND_URL_VARIABLE);
+        }
         if (command.prefix[0] === "docker") overrideServices[appService].platform = targetPlatform;
         if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${staticFrontend ? 80 : config.application.port}`];
         else if (staticFrontend && (!Array.isArray(services[appService]?.ports) || services[appService]?.ports.length === 0)) overrideServices[appService].ports = ["80:80"];

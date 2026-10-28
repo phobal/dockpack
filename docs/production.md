@@ -42,6 +42,22 @@ dockpack prod inspect ./my-project-prod.tar.gz
 
 静态前端的生产服务方式应按项目配置，例如使用已有静态资源服务 Dockerfile；开发服务器命令不能直接当作完整的生产方案。
 
+### 自动生成的静态前端与 API 代理
+
+识别为 Vite 静态前端时，即使没有 Nginx 配置或 Compose 文件，dockpack 也会自动构建静态资源、生成 Nginx 镜像和部署 Compose。`application.command` 应留空；默认执行 `npm run build`，也可通过 `application.build_command` 指定对应的 npm 构建脚本。默认对外端口为 80，设置 `application.port` 可改变主机端口，容器端口仍为 80。
+
+自动生成的 Nginx 默认将 `/api` 和 `/api/…` 转发到部署环境变量 `BACKEND_URL`，保留原始路径及查询参数。例如请求 `/api/users?page=1` 会转发到 `http://backend:8000/api/users?page=1`。支持 WebSocket 和 SSE；API 响应不缓冲，后端错误响应不会回退为前端首页。其他页面保持 SPA 路由回退，缺失的静态文件返回 404。
+
+`BACKEND_URL` 是必填的运行时配置，记录在生产包 `.env.example` 和清单中。可以在部署目录的 `.env` 设置，或通过执行命令的环境传入：
+
+```sh
+BACKEND_URL=http://192.168.1.100:8000 dockpack deploy up ./offline-prod-linux-amd64.tar.gz
+```
+
+地址必须为 `http://` 或 `https://` 的源地址（主机和可选端口），不包含 `/api`、其他路径、查询参数或账号密码；末尾单个 `/` 会自动去除。使用 Compose 服务名时，该服务须与前端容器处于可互通的 Docker 网络。`localhost` 指向前端容器自身，应使用容器可访问的后端地址。
+
+后端地址在 Nginx 容器启动时注入，修改后重新执行 `deploy up` 即可，无需重新构建镜像。缺少或格式错误时启动会报错。Vite 开发代理不会自动导入生产配置；自定义 Dockerfile / Nginx 的流程继续由项目维护代理规则。
+
 ## 3. 在离线部署机器启动
 
 将生产包和该主机适用的 dockpack CLI 运行包传给与包内目标架构一致的 Linux Docker 主机，然后执行：
