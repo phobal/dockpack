@@ -69,7 +69,7 @@ dockpack deploy status ./my-project-prod.tar.gz
 dockpack deploy logs ./my-project-prod.tar.gz
 ```
 
-`deploy up` 在镜像未导入时会从包中导入，再启动 Compose，不会构建或拉取镜像。生产部署机器不需要项目源码或开发依赖缓存，但需要准备运行所需的配置与数据。
+`deploy up` 在镜像未导入时会从包中导入，再启动 Compose，不会构建或拉取镜像。支持 `docker compose` 与独立的 `docker-compose`，优先使用前者。Compose v2 使用 `--pull never`；Compose v1 使用移除 `pull_policy` 的兼容配置，启动前校验所有服务引用的包内本地镜像，并使用 `--no-build`。原包无需重新制作。生产部署机器不需要项目源码或开发依赖缓存，但需要准备运行所需的配置与数据。
 
 若包声明了环境变量，在部署目录的 `.env` 或执行命令的进程环境中提供。需要配置的变量写在包内 `.env.example`。部署目录默认为 `~/.local/share/dockpack/deployments/`，设置了 `XDG_DATA_HOME` 时则在其下的 `dockpack/deployments/`。
 

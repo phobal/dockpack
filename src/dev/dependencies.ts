@@ -124,9 +124,10 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 let completed = false;
 // Lifecycle scripts can write to stdout even with --json. Parse the trailing
-// npm JSON document, keeping script output visible and requiring a real summary.
+// npm JSON document even when script output has no trailing newline.
+// Keep script output visible and still require a real completion summary.
 const output = result.stdout || "";
-const starts = [...output.matchAll(/(?:^|\n)[ \t]*(?=\{)/g)].map(match => match.index + match[0].length);
+const starts = [...output.matchAll(/\{/g)].map(match => match.index);
 for (const start of starts.reverse()) {
   try {
     const summary = JSON.parse(output.slice(start));

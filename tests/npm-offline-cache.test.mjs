@@ -113,3 +113,8 @@ for (const mode of ['missing-summary', 'fatal-zero']) {
     assert.match(result.stderr, /exit=0; signal=none; completion_summary=/);
   }));
 }
+
+test('prepare output without a newline can directly precede npm JSON', () => withLifecycle('node -e "process.stdout.write(\'git command not found\')"', result => {
+  assert.match(result.stdout, /git command not found\{/);
+  assert.equal(result.status, 0, result.stderr);
+}));

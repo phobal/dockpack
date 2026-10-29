@@ -4,7 +4,7 @@ import { createReadStream, existsSync, readFileSync as readTextSync } from "node
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import * as tar from "tar";
 import { bundleFingerprint, extractArchive, inspectArchive } from "../bundles/archive.js";
 import type { BundleManifest } from "../bundles/manifest.js";
@@ -38,7 +38,7 @@ async function loadDeployment(bundlePath: string, importImages: boolean, activat
     manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8")) as BundleManifest;
   }
   if (manifest.bundle_kind !== "prod") throw new DockpackError("Expected a production bundle.");
-  const composeFile = path.join(root, "compose", "compose.yaml");
+  let composeFile = path.join(root, "compose", "compose.yaml");
   if (!existsSync(composeFile)) throw new DockpackError("Production bundle has no compose/compose.yaml.");
   const docker = new DockerRunner();
   if (!docker.available()) throw new DockpackError("Docker CLI and daemon are required for deployment.");
@@ -61,6 +61,14 @@ async function loadDeployment(bundlePath: string, importImages: boolean, activat
         throw new DockpackError(`Imported image ${image} does not match the production bundle platform.`);
       }
     }
+  }
+  if (legacyCompose()) {
+    // Keep the archived model intact; v1 rejects the v2 pull_policy field.
+    const model = parse(await readFile(composeFile, "utf8")) as { name?: string; services: Record<string, Record<string, unknown>> };
+    delete model.name; // The project name is supplied with -p on both CLIs.
+    for (const service of Object.values(model.services)) delete service.pull_policy;
+    composeFile = path.join(root, "compose", "compose.legacy.yaml");
+    await writeFile(composeFile, stringify(model), "utf8");
   }
   return { root, composeFile, manifest, projectName: `dockpack-${slug(manifest.project_name)}` };
 }
@@ -95,14 +103,34 @@ function composeCall(deployment: Deployment, args: string[]): string {
   return runCompose([...composeArgs(deployment), ...args], deployment.root);
 }
 
+function legacyCompose(): boolean {
+  const command = getComposeCommand();
+  if (!command) throw new DockpackError("Neither 'docker compose' nor 'docker-compose' is available.");
+  // Compose v2 can also be installed as the standalone docker-compose binary.
+  const major = command.version.match(/\bversion\s+v?(\d+)/i)?.[1];
+  return command.prefix[0] !== "docker" && (!major || Number(major) < 2);
+}
+
 function requireOfflineStartup(): void {
-  if (requireCompose()[0] !== "docker") {
-    throw new DockpackError("Docker Compose v2 ('docker compose') is required to start production services with --pull never. Upgrade legacy docker-compose before deploying or restoring services.");
-  }
+  requireCompose();
 }
 
 function startProduction(deployment: Deployment): void {
-  composeCall(deployment, ["up", "-d", "--no-build", "--pull", "never"]);
+  const legacy = legacyCompose();
+  if (legacy) {
+    // v1 reuses local images but has no --pull never flag. Fail before invoking
+    // it if any service image is absent, outside the bundle, or mismatched.
+    const docker = new DockerRunner();
+    const model = parse(readTextSync(deployment.composeFile, "utf8")) as { services: Record<string, { image?: string }> };
+    for (const [name, service] of Object.entries(model.services)) {
+      const image = service.image;
+      if (!image || !deployment.manifest.images.includes(image) || !docker.hasImage(image)
+        || docker.imagePlatform(image) !== deployment.manifest.target_platform) {
+        throw new DockpackError(`Cannot start '${name}' offline: its production bundle image '${image ?? "missing"}' is not available for ${deployment.manifest.target_platform}. Import the production bundle again.`);
+      }
+    }
+  }
+  composeCall(deployment, ["up", "-d", "--no-build", ...(legacy ? [] : ["--pull", "never"])]);
 }
 
 async function validateArchivePaths(archivePath: string): Promise<void> {
