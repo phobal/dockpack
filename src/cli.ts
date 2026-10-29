@@ -124,23 +124,23 @@ prod.command("inspect").argument("<bundle>").action(async (bundle: string) => pr
 
 const deploy = program.command("deploy").description("Manage offline production deployments");
 for (const action of ["import", "up", "down", "status", "logs", "backup", "restore"]) {
-  const command = deploy.command(action).argument("<bundle>");
+  const command = deploy.command(action).argument("<bundle>").option("--env-file <path>", "deployment environment file (default: .env beside the bundle)");
   if (action === "logs") {
-    command.argument("[service]").action(async (bundle: string, service?: string) => logsProduction(bundle, service));
+    command.argument("[service]").action(async (bundle: string, service: string | undefined, options: { envFile?: string }) => logsProduction(bundle, service, options.envFile));
   } else if (action === "backup") {
-    command.option("-o, --output <path>").action(async (bundle: string, options: { output?: string }) => {
-      logger.success(`Created backup: ${await backupProduction(bundle, options.output)}`);
+    command.option("-o, --output <path>").action(async (bundle: string, options: { output?: string; envFile?: string }) => {
+      logger.success(`Created backup: ${await backupProduction(bundle, options.output, options.envFile)}`);
     });
   } else if (action === "restore") {
     command.requiredOption("--backup <path>").option("--overwrite", "replace existing volume contents").action(
-      async (bundle: string, options: { backup: string; overwrite?: boolean }) => restoreProduction(bundle, options.backup, Boolean(options.overwrite)),
+      async (bundle: string, options: { backup: string; overwrite?: boolean; envFile?: string }) => restoreProduction(bundle, options.backup, Boolean(options.overwrite), options.envFile),
     );
   } else {
-    command.action(async (bundle: string) => {
-      if (action === "import") return importProductionBundle(bundle);
-      if (action === "up") return upProduction(bundle);
-      if (action === "down") return downProduction(bundle);
-      return statusProduction(bundle);
+    command.action(async (bundle: string, options: { envFile?: string }) => {
+      if (action === "import") return importProductionBundle(bundle, options.envFile);
+      if (action === "up") return upProduction(bundle, options.envFile);
+      if (action === "down") return downProduction(bundle, options.envFile);
+      return statusProduction(bundle, options.envFile);
     });
   }
 }

@@ -22,7 +22,7 @@ export const backendEnvironmentScript = [
   "",
 ].join("\n");
 
-export function nginxTemplate(base: string): string {
+export function nginxTemplate(base: string, withProxy = true): string {
   const proxy = [
     '        set $dockpack_backend "${BACKEND_URL}";',
     "        proxy_pass $dockpack_backend$request_uri;",
@@ -40,16 +40,12 @@ export function nginxTemplate(base: string): string {
     "        proxy_send_timeout 3600s;",
   ];
   return [
-    "map $http_upgrade $dockpack_connection {",
-    "    default upgrade;",
-    "    '' close;",
-    "}",
+    ...(withProxy ? ["map $http_upgrade $dockpack_connection {", "    default upgrade;", "    '' close;", "}"] : []),
     "server {",
     "    listen 80;", "    server_name _;", "    root /usr/share/nginx/html;", "    index index.html;",
     // Docker's embedded resolver also resolves external names via daemon DNS.
     "    resolver 127.0.0.11 valid=10s ipv6=off;",
-    "    location = /api {", ...proxy, "    }",
-    "    location ^~ /api/ {", ...proxy, "    }",
+    ...(withProxy ? ["    location = /api {", ...proxy, "    }", "    location ^~ /api/ {", ...proxy, "    }"] : []),
     ...(base === "/" ? [] : ["    location / { return 404; }", `    location = ${base.slice(0, -1)} { return 302 ${base}; }`]),
     `    location ${base} { try_files $uri $uri/ ${base}index.html; }`,
     "    location ~* \\.(?:js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|wasm)$ { try_files $uri =404; }",

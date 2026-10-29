@@ -21,7 +21,7 @@ import { defaultDevelopmentBundlePath } from "../dev/bundle-path.js";
 import { defaultProductionBundlePath, prepareProductionResources } from "./resources.js";
 import { createFrontendWorkspace } from "./frontend-workspace.js";
 import { productionStep } from "./progress.js";
-import { nginxTemplate, backendEnvironmentScript, backendEnvironment, BACKEND_URL_VARIABLE } from "./frontend-nginx.js";
+import { frontendRuntime, writeEnvironmentExample, type FrontendRuntime } from "./frontend-config.js";
 
 function appImageName(projectName: string, service: string): string {
   const clean = `${projectName}-${service}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -92,7 +92,7 @@ await rm(path.resolve("/workspace", output), { recursive: true, force: true });
 await writeFile("/workspace/.dockpack-static-build.json", JSON.stringify({ output, base: config.base }));
 `;
 
-async function buildStaticFrontend(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, nodeImage: string, frontend: StaticFrontend, targetPlatform: string): Promise<void> {
+async function buildStaticFrontend(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, nodeImage: string, frontend: StaticFrontend, targetPlatform: string, config: Awaited<ReturnType<typeof readConfig>>): Promise<FrontendRuntime> {
   if (!docker.hasImage(STATIC_FRONTEND_IMAGE) || docker.imagePlatform(STATIC_FRONTEND_IMAGE) !== targetPlatform) {
     throw new DockpackError(`Static frontend production builds need ${STATIC_FRONTEND_IMAGE} for ${targetPlatform}. Recreate the development bundle with the updated CLI on a connected machine, transfer it, and run 'dockpack build prod' again.`);
   }
@@ -118,17 +118,19 @@ async function buildStaticFrontend(root: string, stage: string, image: string, c
     const site = path.join(runtime, "site", ...base.split("/").filter(Boolean));
     await mkdir(site, { recursive: true });
     await productionStep("Exporting static frontend assets", () => active.copyOutput(relative, site));
-    await writeFile(path.join(runtime, "default.conf.template"), nginxTemplate(base), "utf8");
-    await writeFile(path.join(runtime, "19-dockpack-backend.envsh"), backendEnvironmentScript, "utf8");
+    const settings = await frontendRuntime(root, config, base);
+    const template = settings.main ? "nginx.conf.template" : "default.conf.template";
+    await writeFile(path.join(runtime, template), settings.content, "utf8");
     await writeFile(path.join(runtime, "Dockerfile"), [
       `FROM ${STATIC_FRONTEND_IMAGE}`,
       'COPY ["site/", "/usr/share/nginx/html/"]',
-      'COPY ["default.conf.template", "/etc/nginx/templates/default.conf.template"]',
-      'COPY ["19-dockpack-backend.envsh", "/docker-entrypoint.d/19-dockpack-backend.envsh"]',
-      "RUN chmod +x /docker-entrypoint.d/19-dockpack-backend.envsh",
+      `COPY ["${template}", "/etc/nginx/templates/${template}"]`,
+      `ENV NGINX_ENVSUBST_FILTER="^(${settings.variables.join("|")})$"`,
+      ...(settings.main ? ['ENV NGINX_ENVSUBST_OUTPUT_DIR="/etc/nginx"'] : []),
       "EXPOSE 80", "",
     ].join("\n"), "utf8");
     await productionStep("Building Nginx production image", () => docker.run(["buildx", "build", "--pull=false", "--network=none", "--platform", targetPlatform, "--load", "--tag", image, runtime], { streamOutput: true }));
+    return settings;
   } finally {
     try { dockerWorkspace?.cleanup(); }
     finally { await rm(context, { recursive: true, force: true }); }
@@ -146,7 +148,7 @@ function lockFile(detection: { ecosystem: string; lockFiles: string[]; dependenc
   return "package-lock.json";
 }
 
-async function buildGeneratedApplication(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, config: Awaited<ReturnType<typeof readConfig>>): Promise<boolean> {
+async function buildGeneratedApplication(root: string, stage: string, image: string, cacheDir: string, docker: DockerRunner, config: Awaited<ReturnType<typeof readConfig>>): Promise<FrontendRuntime | false> {
   if (docker.platform().os !== "linux") throw new DockpackError("Production image creation requires a Docker daemon capable of building Linux containers.");
   const targetPlatform = config.target.production_platform;
   const detections = await detectProject(root);
@@ -159,8 +161,7 @@ async function buildGeneratedApplication(root: string, stage: string, image: str
   const baseImage = await runtimeImage(detection, root, config.runtime);
   if (!docker.hasImage(baseImage)) throw new DockpackError(`Required base image ${baseImage} is not present locally. Prepare it in the development bundle before going offline.`);
   if (frontend) {
-    await buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend, targetPlatform);
-    return true;
+    return buildStaticFrontend(root, stage, image, cacheDir, docker, baseImage, frontend, targetPlatform, config);
   }
   const basePlatform = docker.imagePlatform(baseImage);
   if (basePlatform !== targetPlatform) throw new DockpackError(`Base image ${baseImage} is ${basePlatform}; production build needs ${targetPlatform}.`);
@@ -338,6 +339,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     const generatedImage = appImageName(config.project.name, appService);
     const findings: string[] = [];
     const requiredConfig = new Set<string>();
+    const frontendVariables = new Set<string>();
     const persistentVolumes = new Set<string>();
     const composeDir = path.join(stage, "compose");
     await mkdir(composeDir, { recursive: true });
@@ -350,13 +352,10 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
       const portMap = hostPort ? [`${hostPort}:${staticFrontend ? 80 : hostPort}`] : [];
       const composeModel = { services: { [appService]: {
         image: generatedImage, ports: portMap,
-        ...(staticFrontend ? { environment: backendEnvironment } : {}),
+        ...(staticFrontend ? { environment: staticFrontend.environment } : {}),
       } } };
-      if (staticFrontend) {
-        requiredConfig.add(BACKEND_URL_VARIABLE);
-        await writeFile(path.join(stage, ".env.example"), "BACKEND_URL=\n", "utf8");
-        await writeFile(path.join(composeDir, ".env.example"), "BACKEND_URL=\n", "utf8");
-      }
+      if (staticFrontend) for (const name of staticFrontend.required) requiredConfig.add(name);
+      await writeEnvironmentExample(root, stage, staticFrontend ? staticFrontend.variables : requiredConfig);
       const images = await productionStep("Exporting production images", () => exportProductionImages(composeModel, docker, stage, targetPlatform));
       await writeFile(normalizedPath, stringify(composeModel), "utf8");
       const manifest = makeManifest({
@@ -403,8 +402,9 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
         const staticFrontend = await buildGeneratedApplication(root, stage, generatedImage, path.join(bundleRoot, "cache"), docker, config);
         overrideServices[appService] = { image: generatedImage, build: null };
         if (staticFrontend) {
-          overrideServices[appService].environment = backendEnvironment;
-          requiredConfig.add(BACKEND_URL_VARIABLE);
+          overrideServices[appService].environment = staticFrontend.environment;
+          for (const name of staticFrontend.required) requiredConfig.add(name);
+          for (const name of staticFrontend.variables) frontendVariables.add(name);
         }
         if (command.prefix[0] === "docker") overrideServices[appService].platform = targetPlatform;
         if (config.application.port) overrideServices[appService].ports = [`${config.application.port}:${staticFrontend ? 80 : config.application.port}`];
@@ -488,11 +488,7 @@ export async function buildProductionBundle(projectDir: string, outputPath?: str
     await writeFile(normalizedPath, stringify(deploymentModel), "utf8");
 
     for (const finding of findings) logger.warn(`dockpack: warning: ${finding}`);
-    const example = [...requiredConfig].sort().map((key) => `${key}=`).join("\n");
-    if (example) {
-      await writeFile(path.join(composeDir, ".env.example"), `${example}\n`, "utf8");
-      await writeFile(path.join(stage, ".env.example"), `${example}\n`, "utf8");
-    }
+    await writeEnvironmentExample(root, stage, [...requiredConfig, ...frontendVariables]);
     await writeFile(path.join(composeDir, "README.md"), [
       `# ${config.project.name} production bundle`,
       "",

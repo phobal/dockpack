@@ -41,6 +41,12 @@ export const dockpackConfigSchema = z.object({
     dev_command: z.array(z.string()).default([]),
     dev_port: z.number().int().min(1).max(65535).nullable().default(null),
   }).strict().default({}),
+  frontend: z.object({
+    nginx_config: z.string().min(1).optional(),
+    nginx_config_type: z.enum(["auto", "server", "main"]).default("auto"),
+    environment: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).default({}),
+    required_env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
+  }).strict().default({}),
   target: z.object({
     dev_platform: z.enum(["auto", "linux/amd64", "linux/arm64"]).default("auto"),
     production_platform: z.enum(["linux/amd64", "linux/arm64"]).default("linux/amd64"),

@@ -42,21 +42,35 @@ dockpack prod inspect ./my-project-prod.tar.gz
 
 静态前端的生产服务方式应按项目配置，例如使用已有静态资源服务 Dockerfile；开发服务器命令不能直接当作完整的生产方案。
 
-### 自动生成的静态前端与 API 代理
+### 静态前端、自定义 Nginx 与项目环境变量
 
-识别为 Vite 静态前端时，即使没有 Nginx 配置或 Compose 文件，dockpack 也会自动构建静态资源、生成 Nginx 镜像和部署 Compose。`application.command` 应留空；默认执行 `npm run build`，也可通过 `application.build_command` 指定对应的 npm 构建脚本。默认对外端口为 80，设置 `application.port` 可改变主机端口，容器端口仍为 80。
+识别为 Vite 静态前端时，没有 Compose 文件也能自动构建静态资源、Nginx 镜像和部署 Compose。`application.command` 留空；默认执行 `npm run build`，也可通过 `application.build_command` 指定 npm 构建脚本。默认映射 `80:80`；`application.port` 可改变主机端口。
 
-自动生成的 Nginx 默认将 `/api` 和 `/api/…` 转发到部署环境变量 `BACKEND_URL`，保留原始路径及查询参数。例如请求 `/api/users?page=1` 会转发到 `http://backend:8000/api/users?page=1`。支持 WebSocket 和 SSE；API 响应不缓冲，后端错误响应不会回退为前端首页。其他页面保持 SPA 路由回退，缺失的静态文件返回 404。
+优先使用项目根目录的 `nginx.conf`，保留项目自己的代理路径、SSE、WebSocket 等配置。没有该文件时，生成纯静态 SPA 配置，不添加 API 代理，不要求 `BACKEND_URL`。也可在 `.dockpack.yaml` 显式配置：
 
-`BACKEND_URL` 是必填的运行时配置，记录在生产包 `.env.example` 和清单中。可以在部署目录的 `.env` 设置，或通过执行命令的环境传入：
-
-```sh
-BACKEND_URL=http://192.168.1.100:8000 dockpack deploy up ./offline-prod-linux-amd64.tar.gz
+```yaml
+frontend:
+  nginx_config: deploy/nginx.conf
+  nginx_config_type: auto # auto、server 或 main
+  environment:
+    DOCUMENT_API_URL: "${DOCUMENT_API_URL:-http://api:8000}"
+    APP_NAME: "${APP_NAME:-documents}"
+  required_env: [] # 仅显式列出的变量必填
 ```
 
-地址必须为 `http://` 或 `https://` 的源地址（主机和可选端口），不包含 `/api`、其他路径、查询参数或账号密码；末尾单个 `/` 会自动去除。使用 Compose 服务名时，该服务须与前端容器处于可互通的 Docker 网络。`localhost` 指向前端容器自身，应使用容器可访问的后端地址。
+`server` 配置片段渲染至 `/etc/nginx/conf.d/default.conf`，`main` 完整配置渲染至 `/etc/nginx/nginx.conf`；`auto` 根据 `events`、`http` 或 `worker_processes` 指令识别。自定义配置须使用镜像内的静态资源路径 `/usr/share/nginx/html` 和容器监听端口 80；相关 include 文件需自行通过 Dockerfile 提供。
 
-后端地址在 Nginx 容器启动时注入，修改后重新执行 `deploy up` 即可，无需重新构建镜像。缺少或格式错误时启动会报错。Vite 开发代理不会自动导入生产配置；自定义 Dockerfile / Nginx 的流程继续由项目维护代理规则。
+Nginx 配置中的 `${DOCUMENT_API_URL}` 等大写变量占位符会自动加入容器环境，按启动时的值替换；`$uri`、`$host` 等 Nginx 变量保持原样。变量默认为可选；在 `required_env` 声明后会检查非空。已存在的 Compose 环境配置会保留。
+
+生产包只在根目录保留一份 `.env.example`，复用项目自己的 `.env.example` 并追加缺少的变量名。项目真实 `.env` 不会作为部署环境文件进入包内。部署时将自己的 `.env` 放在生产压缩包旁，或使用指定路径：
+
+```sh
+dockpack deploy up ./offline-prod-linux-arm64.tar.gz --env-file ./production.env
+```
+
+所有 `deploy` 子命令均支持 `--env-file`。选择顺序为显式路径、生产包旁的 `.env`、缓存部署目录的 `.env`。使用显式文件时，后续 `down`、`status`、`logs` 等命令也传入相同参数。更改 Nginx 运行时变量后重新执行 `deploy up`，无需重建镜像。
+
+Vite 的 `VITE_*` 通常在构建时写入浏览器静态资源；项目 `.env` 和 `.env.production` 在生产构建时读取，修改这些值后须重新执行 `build prod`。给 Nginx 容器传变量不会自动修改已编译的前端 JavaScript。后端服务名必须在容器网络中可解析，`localhost` 指向前端容器自身。
 
 ## 3. 在离线部署机器启动
 
@@ -71,7 +85,7 @@ dockpack deploy logs ./my-project-prod.tar.gz
 
 `deploy up` 在镜像未导入时会从包中导入，再启动 Compose，不会构建或拉取镜像。支持 `docker compose` 与独立的 `docker-compose`，优先使用前者。Compose v2 使用 `--pull never`；Compose v1 使用移除 `pull_policy` 的兼容配置，启动前校验所有服务引用的包内本地镜像，并使用 `--no-build`。原包无需重新制作。生产部署机器不需要项目源码或开发依赖缓存，但需要准备运行所需的配置与数据。
 
-若包声明了环境变量，在部署目录的 `.env` 或执行命令的进程环境中提供。需要配置的变量写在包内 `.env.example`。部署目录默认为 `~/.local/share/dockpack/deployments/`，设置了 `XDG_DATA_HOME` 时则在其下的 `dockpack/deployments/`。
+若包声明了环境变量，在生产包旁的 `.env`、`--env-file` 指定的文件或进程环境中提供。需要配置的变量写在包根目录唯一的 `.env.example`。部署目录默认为 `~/.local/share/dockpack/deployments/`，设置了 `XDG_DATA_HOME` 时则在其下的 `dockpack/deployments/`。
 
 项目内的 bind mount 会改为部署目录 `runtime/` 下的对应路径，该目录初始为空；源机器上的文件和挂载数据不会随生产包复制。外部卷、外部网络、secrets、主机网络和设备映射需按包内提示在目标主机准备。
 

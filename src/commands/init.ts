@@ -74,6 +74,7 @@ export async function initializeProject(projectDir: string): Promise<InitSummary
       dev_command: developmentServer.command,
       dev_port: developmentServer.port,
     },
+    frontend: { nginx_config_type: "auto", environment: {}, required_env: [] },
     target: { dev_platform: "auto", production_platform: "linux/amd64" },
     compose: {
       files: compose.files.map((file) => path.relative(root, file)),

@@ -16,6 +16,7 @@ import { readProductionImageIds } from "./images.js";
 interface Deployment {
   root: string;
   composeFile: string;
+  envFile: string;
   manifest: BundleManifest;
   projectName: string;
 }
@@ -24,7 +25,7 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 36) || "project";
 }
 
-async function loadDeployment(bundlePath: string, importImages: boolean, activateImages = false): Promise<Deployment> {
+async function loadDeployment(bundlePath: string, importImages: boolean, activateImages = false, envFile?: string): Promise<Deployment> {
   const fingerprint = await bundleFingerprint(bundlePath);
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   const destination = path.join(base, "dockpack", "deployments", fingerprint);
@@ -70,12 +71,15 @@ async function loadDeployment(bundlePath: string, importImages: boolean, activat
     composeFile = path.join(root, "compose", "compose.legacy.yaml");
     await writeFile(composeFile, stringify(model), "utf8");
   }
-  return { root, composeFile, manifest, projectName: `dockpack-${slug(manifest.project_name)}` };
+  const externalEnv = path.join(path.dirname(path.resolve(bundlePath)), ".env");
+  if (envFile && !existsSync(path.resolve(envFile))) throw new DockpackError(`Environment file not found: ${path.resolve(envFile)}`);
+  const selectedEnv = envFile ? path.resolve(envFile) : existsSync(externalEnv) ? externalEnv : path.join(root, ".env");
+  return { root, composeFile, envFile: selectedEnv, manifest, projectName: `dockpack-${slug(manifest.project_name)}` };
 }
 
 function composeArgs(deployment: Deployment): string[] {
   const args = ["-p", deployment.projectName, "-f", deployment.composeFile];
-  const envFile = path.join(deployment.root, ".env");
+  const envFile = deployment.envFile;
   if (existsSync(envFile)) args.push("--env-file", envFile);
   return args;
 }
@@ -87,13 +91,13 @@ function requireCompose(): string[] {
 }
 
 function missingEnvValues(deployment: Deployment): string[] {
-  const envFile = path.join(deployment.root, ".env");
-  const supplied = new Set(Object.keys(process.env));
+  const envFile = deployment.envFile;
+  const supplied = new Set(Object.keys(process.env).filter(key => process.env[key]?.trim()));
   if (existsSync(envFile)) {
     const text = readTextSync(envFile, "utf8");
     for (const line of text.split(/\r?\n/)) {
-      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
-      if (match?.[1]) supplied.add(match[1]);
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (match?.[1] && match[2]?.replace(/\s+#.*$/, "").replace(/^[\'"]|[\'"]$/g, "").trim()) supplied.add(match[1]);
     }
   }
   return deployment.manifest.required_config.filter((key) => !supplied.has(key));
@@ -151,35 +155,35 @@ async function validateArchivePaths(archivePath: string): Promise<void> {
   }
 }
 
-export async function importProductionBundle(bundlePath: string): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, true);
+export async function importProductionBundle(bundlePath: string, envFile?: string): Promise<void> {
+  const deployment = await loadDeployment(bundlePath, true, false, envFile);
   logger.success(`Imported production bundle ${deployment.manifest.project_name} to ${deployment.root}`);
 }
 
-export async function upProduction(bundlePath: string): Promise<void> {
+export async function upProduction(bundlePath: string, envFile?: string): Promise<void> {
   requireOfflineStartup();
-  const deployment = await loadDeployment(bundlePath, false, true);
+  const deployment = await loadDeployment(bundlePath, false, true, envFile);
   const missing = missingEnvValues(deployment);
   if (missing.length) {
-    throw new DockpackError(`Set required production variables in ${path.join(deployment.root, ".env")} or the process environment: ${missing.join(", ")}`);
+    throw new DockpackError(`Set required production variables in ${deployment.envFile} or the process environment: ${missing.join(", ")}`);
   }
   startProduction(deployment);
   logger.success(`Started ${deployment.manifest.project_name}`);
 }
 
-export async function downProduction(bundlePath: string): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, false);
+export async function downProduction(bundlePath: string, envFile?: string): Promise<void> {
+  const deployment = await loadDeployment(bundlePath, false, false, envFile);
   composeCall(deployment, ["down"]);
   logger.success("Stopped Compose services. Named volumes were retained.");
 }
 
-export async function statusProduction(bundlePath: string): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, false);
+export async function statusProduction(bundlePath: string, envFile?: string): Promise<void> {
+  const deployment = await loadDeployment(bundlePath, false, false, envFile);
   console.log(composeCall(deployment, ["ps"]));
 }
 
-export async function logsProduction(bundlePath: string, service?: string): Promise<void> {
-  const deployment = await loadDeployment(bundlePath, false);
+export async function logsProduction(bundlePath: string, service?: string, envFile?: string): Promise<void> {
+  const deployment = await loadDeployment(bundlePath, false, false, envFile);
   const command = requireCompose();
   const { spawnSync } = await import("node:child_process");
   const args = [...composeArgs(deployment), "logs", "--follow", ...(service ? [service] : [])];
@@ -215,9 +219,9 @@ async function parseVolumes(deployment: Deployment): Promise<Array<{ source: str
   return result;
 }
 
-export async function backupProduction(bundlePath: string, outputPath?: string): Promise<string> {
+export async function backupProduction(bundlePath: string, outputPath?: string, envFile?: string): Promise<string> {
   requireOfflineStartup();
-  const deployment = await loadDeployment(bundlePath, false, true);
+  const deployment = await loadDeployment(bundlePath, false, true, envFile);
   const volumes = await parseVolumes(deployment);
   if (volumes.length === 0) throw new DockpackError("No internal named volumes were found in this production bundle.");
   const output = path.resolve(outputPath ?? `${deployment.manifest.project_name}-backup-${new Date().toISOString().replaceAll(":", "-")}.tar.gz`);
@@ -243,9 +247,9 @@ export async function backupProduction(bundlePath: string, outputPath?: string):
   }
 }
 
-export async function restoreProduction(bundlePath: string, backupPath: string, overwrite: boolean): Promise<void> {
+export async function restoreProduction(bundlePath: string, backupPath: string, overwrite: boolean, envFile?: string): Promise<void> {
   requireOfflineStartup();
-  const deployment = await loadDeployment(bundlePath, false, true);
+  const deployment = await loadDeployment(bundlePath, false, true, envFile);
   const volumes = await parseVolumes(deployment);
   const stage = await mkdtemp(path.join(os.tmpdir(), "dockpack-restore-"));
   try {

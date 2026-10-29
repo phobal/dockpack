@@ -267,3 +267,16 @@ compose:
 | `dependencies.*_files` 检测记录 | 当前不改变实际依赖收集行为，不能用来指定新的依赖文件。 |
 
 检查包的实际平台请使用 `dockpack pack inspect <离线包>`。若配置写的是 AMD64 而清单仍为 ARM64，应确认打包工具版本、项目路径，并重新生成、传输正确的包。
+
+## 静态前端生产配置
+
+```yaml
+frontend:
+  nginx_config: nginx.conf # 省略时自动查找根目录 nginx.conf
+  nginx_config_type: auto # auto / server / main
+  environment:
+    API_ORIGIN: "${API_ORIGIN:-http://api:8000}"
+  required_env: []
+```
+
+仅静态前端自动生成 Nginx 流程使用这些字段。Nginx 的 `${API_ORIGIN}` 等大写占位符自动成为可配置变量；只有 `required_env` 中的变量必填。默认不添加 `BACKEND_URL` 或代理规则。完整用法和构建时/运行时变量的区别见 [生产部署文档](production.md)。

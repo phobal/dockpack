@@ -14,13 +14,26 @@ import {detectComposeCommand} from '../dist/compose/inspect.js';
 import {logger} from '../dist/logger.js';
 
 for (const compose of [false, true]) {
- test(`automatic frontend injects runtime backend configuration (${compose ? 'existing Compose' : 'generated Compose'})`, {skip: compose && !detectComposeCommand()}, async t => {
+ for (const variant of ['static', 'custom', 'template', 'main']) {
+ test(`automatic frontend keeps runtime configuration project-owned ${variant} (${compose ? 'existing Compose' : 'generated Compose'})`, {skip: compose && !detectComposeCommand()}, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dockpack-frontend-prod-'));
   try {
    await writeFile(path.join(root, 'package.json'), JSON.stringify({name:'frontend',version:'1.0.0',scripts:{build:'vite build'},devDependencies:{vite:'1.0.0'}}));
    await writeFile(path.join(root, 'package-lock.json'), '{}');
    await writeFile(path.join(root, '.dockpack.yaml'), `project:\n  name: frontend\n  ecosystems: [node]\nruntime:\n  node_version: "22"\napplication:\n  port: 8080\ntarget:\n  dev_platform: linux/amd64\n  production_platform: linux/amd64\ncompose:\n  files: ${compose ? '[compose.yaml]' : '[]'}\n`);
    if (compose) await writeFile(path.join(root,'compose.yaml'), 'services:\n  app:\n    build: .\n    environment:\n      CUSTOM: preserved\n');
+   let custom;
+   if (variant === 'custom') {
+    custom = 'server { listen 80; root /usr/share/nginx/html; location / { try_files $uri $uri/ /index.html; } location /api/v1/agent/ { proxy_pass http://backend:8000; proxy_buffering off; proxy_read_timeout 600s; } }\n';
+    await writeFile(path.join(root,'nginx.conf'),custom);
+   } else if (variant === 'template' || variant === 'main') {
+    custom = 'server { listen 80; location / { try_files $uri /index.html; } location /api/ { proxy_pass ${DOCUMENT_API_URL}; proxy_set_header Host $host; } }\n';
+    if(variant==='main') custom = 'events {}\nhttp {\n' + custom + '}\n';
+    await writeFile(path.join(root,'proxy.conf'),custom);
+    const {appendFile} = await import('node:fs/promises');
+    await appendFile(path.join(root,'.dockpack.yaml'), 'frontend:\n  nginx_config: proxy.conf\n  environment:\n    APP_NAME: "${APP_NAME:-documents}"\n  required_env: [DOCUMENT_API_URL]\n');
+    await writeFile(path.join(root,'.env.example'),'# Project settings\nDOCUMENT_API_URL=http://api:8000\n');
+   }
    const stage=path.join(root,'resources');
    await mkdir(path.join(stage,'images'),{recursive:true});
    await mkdir(path.join(stage,'cache','npm'),{recursive:true});
@@ -42,9 +55,13 @@ for (const compose of [false, true]) {
     if(args[0]==='buildx') {
      const context=args.at(-1);
      const dockerfile=readFileSync(path.join(context,'Dockerfile'),'utf8');
-     assert.match(dockerfile,/\/etc\/nginx\/templates\/default.conf.template/);
-     assert.match(dockerfile,/19-dockpack-backend.envsh/);
-     assert.match(readFileSync(path.join(context,'default.conf.template'),'utf8'),/\$\{BACKEND_URL\}/);
+     const template=variant==='main'?'nginx.conf.template':'default.conf.template';
+     assert.ok(dockerfile.includes('/etc/nginx/templates/'+template));
+     if(variant==='main') assert.match(dockerfile,/NGINX_ENVSUBST_OUTPUT_DIR/);
+     assert.doesNotMatch(dockerfile,/19-dockpack-backend.envsh/);
+     const content=readFileSync(path.join(context,template),'utf8');
+     if(custom) assert.equal(content,custom); else assert.doesNotMatch(content,/BACKEND_URL|proxy_pass/);
+     assert.match(content,/\$uri/);
      inspected=true;
     }
     if(args.some(a=>a.includes('process.stdout.write') && a.includes('.dockpack-static-build.json'))) return JSON.stringify({output:'dist',base:'/'});
@@ -55,11 +72,19 @@ for (const compose of [false, true]) {
    assert.equal(inspected,true);
    const unpacked=await extractArchive(output,path.join(root,'unpacked'));
    const manifest=JSON.parse(await readFile(path.join(unpacked,'manifest.json'),'utf8'));
-   assert.ok(manifest.required_config.includes('BACKEND_URL'));
-   assert.equal(await readFile(path.join(unpacked,'.env.example'),'utf8'),'BACKEND_URL=\n');
+   assert.ok(!manifest.required_config.includes('BACKEND_URL'));
+   const templated=variant==='template'||variant==='main';
+   assert.equal(await readFile(path.join(unpacked,'.env.example'),'utf8'),templated?'# Project settings\nDOCUMENT_API_URL=http://api:8000\nAPP_NAME=\n':'');
+   assert.deepEqual(manifest.required_config,templated?['DOCUMENT_API_URL']:[]);
+   await assert.rejects(readFile(path.join(unpacked,'compose','.env.example')),{code:'ENOENT'});
    const model=parse(await readFile(path.join(unpacked,'compose','compose.yaml'),'utf8'));
-   assert.match(model.services.app.environment.BACKEND_URL,/\$\{BACKEND_URL:\?/);
+   assert.equal(model.services.app.environment?.BACKEND_URL,undefined);
+   if(templated) {
+    assert.match(model.services.app.environment.DOCUMENT_API_URL,/\$\{DOCUMENT_API_URL:\?/);
+    assert.equal(model.services.app.environment.APP_NAME,'${APP_NAME:-documents}');
+   }
    if(compose) assert.equal(model.services.app.environment.CUSTOM,'preserved');
   } finally {await rm(root,{recursive:true,force:true});}
  });
+}
 }
