@@ -31,7 +31,8 @@ export function runCompose(
   if (result.status !== 0) {
     const stderr = result.stderr?.toString() ?? "";
     const stdout = result.stdout?.toString() ?? "";
-    throw new DockpackError((stderr || stdout || `Compose command exited with status ${result.status ?? 1}.`).trim());
+    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+    throw new DockpackError(output || `Compose command exited with status ${result.status ?? 1}.`);
   }
   return result.stdout?.toString().trim() ?? "";
 }

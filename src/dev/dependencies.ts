@@ -123,11 +123,19 @@ try {
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 let completed = false;
-try {
-  const summary = JSON.parse(result.stdout || "");
-  completed = Number.isInteger(summary.added) && summary.added >= 0 && !summary.error;
-} catch {}
+// Lifecycle scripts can write to stdout even with --json. Parse the trailing
+// npm JSON document, keeping script output visible and requiring a real summary.
+const output = result.stdout || "";
+const starts = [...output.matchAll(/(?:^|\n)[ \t]*(?=\{)/g)].map(match => match.index + match[0].length);
+for (const start of starts.reverse()) {
+  try {
+    const summary = JSON.parse(output.slice(start));
+    completed = Number.isInteger(summary.added) && summary.added >= 0 && !summary.error;
+    break;
+  } catch {}
+}
 if (result.error || result.status !== 0 || !completed || /^npm\s+(?:error|ERR!)(?:\s|$)/m.test(result.stderr || "")) {
+  console.error("dockpack: npm install diagnostics: exit=" + result.status + "; signal=" + (result.signal || "none") + "; completion_summary=" + completed + "; node=" + process.version);
   // npm sometimes hides the network failure behind its own exit-handler error.
   // Logs live outside the cache so this also works with a read-only offline cache.
   try {
@@ -135,9 +143,9 @@ if (result.error || result.status !== 0 || !completed || /^npm\s+(?:error|ERR!)(
     const log = logs[logs.length - 1];
     if (log) {
       const failures = readFileSync(logDir + "/" + log, "utf8").split(/\r?\n/)
-        .filter(line => /http fetch .*failed|\b(?:ECONNRESET|ENOTFOUND|ETIMEDOUT|ENOTCACHED|EAI_AGAIN|EINTEGRITY)\b/.test(line));
+        .filter(line => /http fetch .*failed|\b(?:ECONNRESET|ENOTFOUND|ETIMEDOUT|ENOTCACHED|EAI_AGAIN|EINTEGRITY)\b|^\d+ (?:error|verbose (?:stack|exit|code)|info run)\b/.test(line));
       if (failures.length) {
-        console.error("dockpack: npm download/cache failure details:");
+        console.error("dockpack: npm failure details:");
         for (const line of failures.slice(-20)) console.error(line);
       }
     }

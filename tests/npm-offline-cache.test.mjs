@@ -35,12 +35,17 @@ if (process.env.NPM_TEST_FAIL === "1") {
   console.error("npm error ENOTCACHED: genuinely missing tarball");
   process.exit(1);
 }
+if (process.env.NPM_TEST_FAIL === "missing-summary") {
+  console.log("prepare finished without npm completion summary");
+  process.exit(0);
+}
+if (process.env.NPM_TEST_FAIL === "fatal-zero") console.error("npm error Exit handler never called!");
 console.log(JSON.stringify({ added: 0 }));
 `, { mode: 0o755 });
   const run = (args, fail = false) => spawnSync(process.execPath, ["-e", checkedNpmInstall, "--", ...args], {
     cwd: root, encoding: "utf8", env: {
       ...process.env, PATH: bin + path.delimiter + process.env.PATH,
-      NPM_TEST_SOURCE: cache, NPM_TEST_REPORT: report, NPM_TEST_FAIL: fail ? "1" : "0",
+      NPM_TEST_SOURCE: cache, NPM_TEST_REPORT: report, NPM_TEST_FAIL: typeof fail === "string" ? fail : fail ? "1" : "0",
     },
   });
   try { await action({ root, cache, report, run }); }
@@ -78,3 +83,33 @@ test("online collection writes directly to the bundle cache", () => withNpm(asyn
   assert.equal(JSON.parse(await readFile(report, "utf8")).cache, cache);
   assert.equal(existsSync(path.join(cache, "cache-index-update")), true);
 }));
+
+async function withLifecycle(script, action) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dockpack-npm-lifecycle-'));
+  try {
+    await writeFile(path.join(root, 'package.json'), JSON.stringify({name: 'lifecycle-repro', version: '1.0.0', scripts: {prepare: script}}));
+    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({name: 'lifecycle-repro', version: '1.0.0', lockfileVersion: 3, packages: {'': {name: 'lifecycle-repro', version: '1.0.0'}}}));
+    await mkdir(path.join(root, 'cache'));
+    const result = spawnSync(process.execPath, ['-e', checkedNpmInstall, '--', '--offline', '--cache', path.join(root, 'cache')], {cwd: root, encoding: 'utf8'});
+    await action(result);
+  } finally { await rm(root, {recursive: true, force: true}); }
+}
+
+test('successful offline prepare output does not invalidate the npm completion summary', () => withLifecycle('node -e "console.log(\'prepare complete {ok}\')"', result => {
+  assert.match(result.stdout, /prepare complete/);
+  assert.equal(result.status, 0, result.stderr);
+}));
+
+test('failed prepare remains a failure even if it prints a success-shaped JSON object', () => withLifecycle('node -e "console.log(JSON.stringify({added:0})); process.exit(1)"', result => {
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /npm ci did not complete successfully/);
+}));
+
+for (const mode of ['missing-summary', 'fatal-zero']) {
+  test(`npm status zero still fails for ${mode}`, () => withNpm(async ({cache, run}) => {
+    const result = run(['--offline', '--cache', cache], mode);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /npm ci did not complete successfully/);
+    assert.match(result.stderr, /exit=0; signal=none; completion_summary=/);
+  }));
+}
