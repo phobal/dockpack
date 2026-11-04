@@ -63,21 +63,21 @@ export class DockerRunner {
     this.run(["pull", "--platform", platform, image], { streamOutput });
   }
 
-  save(images: string[], outputFile: string, streamOutput = false): void {
+  save(images: string[], outputFile: string, streamOutput = false, platform?: string): void {
     if (images.length === 0) throw new DockpackError("No images were selected for export.");
-    this.run(["image", "save", "--output", outputFile, ...images], { streamOutput });
+    this.run(["image", "save", ...(platform ? ["--platform", platform] : []), "--output", outputFile, ...images], { streamOutput });
   }
 
   load(inputFile: string): void {
     this.run(["image", "load", "--input", inputFile]);
   }
 
-  imagePlatform(image: string): string {
-    return this.run(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image]);
+  imagePlatform(image: string, platform?: string): string {
+    return this.run(["image", "inspect", ...(platform ? ["--platform", platform] : []), "--format", "{{.Os}}/{{.Architecture}}", image]);
   }
 
-  imageId(image: string): string {
-    return this.run(["image", "inspect", "--format", "{{.Id}}", image]);
+  imageId(image: string, platform?: string): string {
+    return this.run(["image", "inspect", ...(platform ? ["--platform", platform] : []), "--format", "{{.Id}}", image]);
   }
 
   hasImage(image: string): boolean {

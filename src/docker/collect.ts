@@ -14,7 +14,15 @@ export function createImageCollector(
   }
   const collected = new Set<string>();
   return (image, platform) => {
-    const actual = docker.hasImage(image) ? docker.imagePlatform(image) : undefined;
+    let actual: string | undefined;
+    if (docker.hasImage(image)) {
+      try {
+        actual = docker.imagePlatform(image, platform);
+      } catch {
+        // A multi-platform tag can exist while the requested variant is absent.
+        actual = undefined;
+      }
+    }
     const key = `${image}\n${platform}`;
     if (actual === platform && (policy !== "always" || collected.has(key))) {
       logger.info(`[dockpack] Using cached image ${image} (${platform}).`);

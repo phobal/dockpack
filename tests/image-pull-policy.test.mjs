@@ -66,11 +66,11 @@ for (const policy of ['missing', 'always', 'never']) {
       for (const method of ['info', 'warn', 'error', 'success']) t.mock.method(logger, method, () => {});
       t.mock.method(DockerRunner.prototype, 'available', () => true);
       t.mock.method(DockerRunner.prototype, 'hasImage', () => true);
-      t.mock.method(DockerRunner.prototype, 'imagePlatform', () => 'linux/amd64');
+      t.mock.method(DockerRunner.prototype, 'imagePlatform', (_, platform) => { assert.equal(platform, 'linux/amd64'); return platform; });
       t.mock.method(DockerRunner.prototype, 'run', () => '');
       const pulls = t.mock.method(DockerRunner.prototype, 'pull', () => {});
       const stop = new Error('reached image export');
-      t.mock.method(DockerRunner.prototype, 'save', () => { throw stop; });
+      t.mock.method(DockerRunner.prototype, 'save', (_, __, ___, platform) => { assert.equal(platform, 'linux/amd64'); throw stop; });
       await assert.rejects(createDevelopmentBundle(root, undefined, policy), error => error === stop);
       assert.deepEqual(pulls.mock.calls.map(c => c.arguments.slice(0, 2)), policy === 'always' ? [
         ['python:3.11-slim', 'linux/amd64'], ['example/cache:1', 'linux/amd64'], ['example/base:1', 'linux/amd64'],

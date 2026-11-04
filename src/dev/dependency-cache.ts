@@ -77,7 +77,7 @@ export async function collectDependencies(
   const lockFiles = ecosystem === "node" ? ["package-lock.json"] : pythonDependencyFiles(project);
   const lockDigest = await sha256Files(project, lockFiles);
   const key = createHash("sha256").update(JSON.stringify({
-    format: 1, version: VERSION, ecosystem, platform, image, imageId: docker.imageId(image), inputDigest,
+    format: 1, version: VERSION, ecosystem, platform, image, imageId: docker.imageId(image, platform), inputDigest,
   })).digest("hex");
   const base = path.join(project, ".dockpack", "cache", "dependencies");
   const entry = path.join(base, key);

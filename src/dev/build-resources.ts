@@ -36,8 +36,8 @@ export async function collectNativeBuildResource(project: string, stage: string,
   let imageId: string;
   try {
     ensureImage(runtime, platform);
-    if (docker.imagePlatform(runtime) !== platform) throw new Error(`Native build image must target ${platform}.`);
-    imageId = docker.imageId(runtime);
+    if (docker.imagePlatform(runtime, platform) !== platform) throw new Error(`Native build image must target ${platform}.`);
+    imageId = docker.imageId(runtime, platform);
     image = `dockpack/build-node:sha256-${imageId.slice("sha256:".length)}`;
     docker.run(["image", "tag", imageId, image]);
   } finally {
@@ -45,7 +45,7 @@ export async function collectNativeBuildResource(project: string, stage: string,
     if (original) docker.run(["image", "tag", original, runtime]);
   }
   const dependency = await collectDependencies(project, path.join(directory, "cache"), image, docker, platform, "node", refreshDependencies);
-  docker.save([image], path.join(directory, "images.tar"), true);
+  docker.save([image], path.join(directory, "images.tar"), true, platform);
   const resource = resourceSchema.parse({ platform, image, image_id: imageId, lock_digest: dependency.lockDigest });
   await writeFile(path.join(directory, "resource.json"), JSON.stringify(resource, null, 2), "utf8");
 }

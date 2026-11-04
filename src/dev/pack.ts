@@ -141,7 +141,7 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
           { ...docker.buildEnvironment(), DOCKER_DEFAULT_PLATFORM: platform }, { streamOutput: true }));
       for (const service of buildServices) {
         const image = String(overrideServices[service.name]!.image);
-        const builtPlatform = docker.imagePlatform(image);
+        const builtPlatform = docker.imagePlatform(image, platform);
         if (builtPlatform !== platform) throw new DockpackError(`Built image ${image} for '${service.name}' is ${builtPlatform}; development bundle needs ${platform}.`);
       }
       await (await import("node:fs/promises")).rm(overrideFile, { force: true });
@@ -181,13 +181,15 @@ export async function createDevelopmentBundle(projectDir: string, outputPath?: s
       images.add(baseImage);
     }
     for (const image of developmentImages) {
-      const actual = docker.imagePlatform(image);
+      const actual = docker.imagePlatform(image, platform);
       if (actual !== platform) {
         throw new DockpackError(`Development image ${image} is ${actual}; expected ${platform}. Ensure production base images do not overwrite development image tags, then create the bundle again.`);
       }
     }
     if (images.size > 0) {
-      await progress(`Exporting ${images.size} Docker images`, () => docker.save([...images], path.join(imagesDir, "images.tar"), true));
+      // Mixed development/production bundles must retain both architectures.
+      const exportPlatform = productionBases.size === 0 || config.target.production_platform === platform ? platform : undefined;
+      await progress(`Exporting ${images.size} Docker images`, () => docker.save([...images], path.join(imagesDir, "images.tar"), true, exportPlatform));
     }
     const nodeDetection = detections.find(item => item.ecosystem === "node");
     if (nodeDetection && await detectStaticFrontend(root, config.application.command, config.application.build_command)) {
